@@ -7,6 +7,52 @@
 
 ---
 
+### [2026-04-15] P0-B 完成：Continuity 持久化与 open_threads 接入 Prompt
+
+Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+
+**状态**：P0-B 已完成。`CompanionContinuityService` 已从短期内存窗口升级为可持久化的连续性状态服务，并且 continuity summary 已进入 PromptBuilder。
+
+**完成内容**：
+- 重构 `src/core/initiative/continuity.py`：
+  - 保留 `record_exchange()`、`record_assistant_message()`、`get_summary()` 等现有 API。
+  - 新增 JSON 持久化：配置 `storage_path` 后自动加载和保存状态。
+  - 新增 `OpenThread`：支持 `add_open_thread()`、`resolve_open_thread()`、`get_open_threads()`。
+  - 新增 `relationship_summary`、`emotional_summary`、`user_style_summary`。
+  - 新增 `recent_topics`、`proactive_cues`、`recent_proactive_count`、`user_returned_recently`。
+  - 新增 `comfort_needed`、`task_focus`、`fragmented_chat` 等主动决策上下文标志。
+- 修改 `src/core/prompt_builder.py`：
+  - 新增 `PromptConfig.enable_continuity`。
+  - 新增 continuity section，将 `RuntimeContext.continuity_summary` 注入 system prompt。
+- 修改 `src/apps/daemon/main.py`：
+  - 新增 `DaemonConfig.continuity_state_path`。
+  - daemon 默认使用 `data/runtime/continuity_state.json`。
+  - 新增 CLI 参数 `--continuity-state-path`。
+- 修改 `src/core/initiative/__init__.py` 导出 `OpenThread`。
+- 新增 `tests/unit/test_continuity_persistence.py`。
+- 补充 PromptBuilder 与 Runtime 测试，验证 open thread 能进入最终 system prompt。
+
+**真实测试结果**：
+- `python -m py_compile src\core\initiative\continuity.py src\core\prompt_builder.py src\apps\daemon\main.py` -> passed
+- `python -m pytest -q tests\unit\test_continuity.py tests\unit\test_continuity_persistence.py tests\unit\test_prompt_builder.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 20 passed
+- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 70 passed
+- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py` -> 2 passed
+- `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py tests\integration\test_end_to_end_llm.py tests\integration\test_persona_real_llm.py` -> 6 passed（非沙箱，真实 Moonshot/Kimi + Desktop MCP + 本地 Ollama）
+- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --continuity-state-path data\runtime\continuity_state_test.json` -> passed
+
+**遇到的问题与修复**：
+- daemon healthcheck 首次在非沙箱环境直接运行失败，原因是命令未设置 `PYTHONPATH`，导致找不到 `apps` 包；带 `PYTHONPATH=src` 后通过。
+- 实现过程中发现 `RuntimeContext.continuity_summary` 之前没有进入 PromptBuilder，违反“子系统数据不进 prompt 就是 bug”的准则；本次已补 continuity section，并增加测试覆盖。
+
+**仍未完成**：
+- P0-C：生活事件库迁移与三层事件系统。
+- P0-D：主动 decider / generator / expression context 重建。
+- P0-E：日常模式更完整的真实 LLM 验收。
+
+**下一步**：进入 P0-C，迁入并清洗 2.0 的生活事件库，实现三层事件系统，让主动话题不再只来自 cooldown/情绪阈值。
+
+---
+
 ### [2026-04-15] P0-A 完成：persona / relationship profile 接入 PromptBuilder
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION

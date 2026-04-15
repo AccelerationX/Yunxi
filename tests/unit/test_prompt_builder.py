@@ -33,6 +33,21 @@ def test_failure_hints_disabled():
     assert "历史经验提醒" not in prompt
 
 
+def test_continuity_summary_in_prompt():
+    builder = YunxiPromptBuilder(PromptConfig(enable_continuity=True))
+    ctx = RuntimeContext(
+        continuity_summary=(
+            "open_threads:\n"
+            "- ask Yuan about today's code - Yuan was in VS Code\n"
+            "recent_topics: long memory"
+        )
+    )
+    prompt = builder.build_system_prompt(ctx)
+    assert "open_threads" in prompt
+    assert "ask Yuan about today's code" in prompt
+    assert "long memory" in prompt
+
+
 def test_available_tools_in_prompt():
     builder = YunxiPromptBuilder(PromptConfig(enable_tools=True))
     ctx = RuntimeContext(available_tools=["clipboard_read", "screenshot_capture"])

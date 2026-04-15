@@ -21,6 +21,7 @@ class PromptConfig:
     enable_relationship: bool = True
     enable_perception: bool = True
     enable_memory: bool = True
+    enable_continuity: bool = True
     enable_failure_hints: bool = True
     enable_emotion: bool = True
     enable_mode: bool = True
@@ -82,6 +83,11 @@ class YunxiPromptBuilder:
 
         if self.config.enable_failure_hints:
             sec = self._build_failure_hints_section(context)
+            if sec:
+                sections.append(sec)
+
+        if self.config.enable_continuity:
+            sec = self._build_continuity_section(context)
             if sec:
                 sections.append(sec)
 
@@ -192,6 +198,11 @@ class YunxiPromptBuilder:
         if not context.failure_hints:
             return ""
         return f"【历史经验提醒】\n{context.failure_hints}"
+
+    def _build_continuity_section(self, context: RuntimeContext) -> str:
+        if not context.continuity_summary:
+            return ""
+        return f"【你们最近的连续性】\n{context.continuity_summary}"
 
     def _build_mode_section(self, context: RuntimeContext) -> str:
         if context.mode == "factory":

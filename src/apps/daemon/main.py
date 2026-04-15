@@ -28,6 +28,7 @@ class DaemonConfig:
 
     provider: str = "moonshot"
     memory_path: str = "data/memory"
+    continuity_state_path: str = "data/runtime/continuity_state.json"
     tick_interval: float = 30.0
     enable_tool_use: bool = True
     initialize_desktop_mcp: bool = True
@@ -81,7 +82,9 @@ async def build_runtime(config: DaemonConfig) -> YunxiRuntime:
         heart_lake=HeartLake(),
         perception=PerceptionCoordinator(),
         memory=memory,
-        continuity=CompanionContinuityService(),
+        continuity=CompanionContinuityService(
+            storage_path=Path(config.continuity_state_path),
+        ),
         mcp_hub=mcp_hub,
     )
 
@@ -155,6 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="云汐日常模式 daemon")
     parser.add_argument("--provider", default="moonshot")
     parser.add_argument("--memory-path", default="data/memory")
+    parser.add_argument("--continuity-state-path", default="data/runtime/continuity_state.json")
     parser.add_argument("--tick-interval", type=float, default=30.0)
     parser.add_argument("--healthcheck", action="store_true")
     parser.add_argument("--disable-tool-use", action="store_true")
@@ -173,6 +177,7 @@ async def async_main() -> None:
     config = DaemonConfig(
         provider=args.provider,
         memory_path=args.memory_path,
+        continuity_state_path=args.continuity_state_path,
         tick_interval=args.tick_interval,
         enable_tool_use=not args.disable_tool_use,
         initialize_desktop_mcp=not args.skip_desktop_mcp,

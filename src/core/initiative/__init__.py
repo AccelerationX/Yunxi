@@ -3,6 +3,7 @@
 from core.initiative.continuity import (
     CompanionContinuityService,
     ConversationExchange,
+    OpenThread,
 )
 
-__all__ = ["CompanionContinuityService", "ConversationExchange"]
+__all__ = ["CompanionContinuityService", "ConversationExchange", "OpenThread"]
