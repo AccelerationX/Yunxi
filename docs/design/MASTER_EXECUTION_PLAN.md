@@ -9,7 +9,7 @@
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
 
-> **2026-04-15 状态更新**：P0-A/P0-B/P0-C 已完成。Persona / relationship profile、Continuity 持久化与 open_threads、生活事件库迁移与三层主动事件系统已经落地并接入 Runtime。Phase 5 仍不能视为完整完成，下一阻塞项是 P0-D：主动 decider / generator / expression context 重建。
+> **2026-04-15 状态更新**：P0-A/P0-B/P0-C/P0-D 已完成。Persona / relationship profile、Continuity 持久化与 open_threads、生活事件库迁移、三层主动事件系统、多维主动决策、expression context 和 proactive generation context 已经落地并接入 Runtime。Phase 5 仍不能视为完整完成，下一阻塞项是 P0-E：日常模式真实 LLM 验收矩阵。
 
 > 状态：重要 / 待实现 / P0 阻塞项。Phase 5 不能被视为完整完成，Phase 6 不应继续扩展，直到本项完成真实 LLM 验收。
 

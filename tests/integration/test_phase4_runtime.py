@@ -111,5 +111,7 @@ async def test_proactive_tick_injects_life_event_material(tmp_path):
 
     assert proactive is not None
     assert "initiative_event" in system_prompt
+    assert "initiative_decision" in system_prompt
+    assert "expression_context" in system_prompt
     assert "Yunxi wants to ask Yuan" in system_prompt
     assert "Do not copy it verbatim" in system_prompt

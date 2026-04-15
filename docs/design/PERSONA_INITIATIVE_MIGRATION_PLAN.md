@@ -46,9 +46,9 @@ yunxi3.0 目前已经打通了 Runtime、LLM、MCP、Memory、HeartLake、主动
 | `D:\yunxi2.0\data\life_events\life_events.json` | 114 条生活化主动事件，含分类、模板、情绪 delta、时间规则、tags | `data/initiative/life_events.json` + `src/core/initiative/event_system.py` | 已完成 | P0 | 已清洗迁入 114 条事件，模板仅作为 LLM prompt 素材，不直接输出。 |
 | `D:\yunxi2.0\data\initiative_events.json` | active_events、stats、主动事件运行状态 | `data/runtime/initiative_state.json` | 待实现 | P1 | 迁移状态结构，不直接迁移历史运行状态。 |
 | `D:\yunxi2.0\core\initiative\event_system.py` | 三层事件系统：内在生活、实时兴趣、混合事件 | `src/core/initiative/event_system.py` | 已完成 / 已接入 Runtime | P0 | 已实现 `inner_life`、`shared_interest`、`mixed` 三层选择、时间规则、冷却与持久化；后续 P0-D 继续接入更完整 decider/generator。 |
-| `D:\yunxi2.0\core\initiative\decider.py` | 时间、情绪、presence、资源、每日预算、连续性判断 | `src/core/initiative/decider.py` 或增强当前 `src/core/cognition/initiative_engine/engine.py` | 待实现 | P0 | 替换当前偏规则化的主动判断。 |
-| `D:\yunxi2.0\core\initiative\generator.py` | 主动消息生成上下文、LLM prompt、事件选题、人格约束 | `src/core/initiative/generator.py` + `YunxiPromptBuilder.build_proactive_prompt()` | 待实现 | P0 | 生成必须统一走真实 LLM，不恢复 sync/template fallback。 |
-| `D:\yunxi2.0\core\initiative\expression_context.py` | 关系感表达姿态，非模板化表达引导 | `src/core/initiative/expression_context.py` | 待实现 | P0 | 迁移为 style guidance，不允许硬套固定句。 |
+| `D:\yunxi2.0\core\initiative\decider.py` | 时间、情绪、presence、资源、每日预算、连续性判断 | 增强当前 `src/core/cognition/initiative_engine/engine.py` | 已完成 | P0 | 已替换单纯阈值判断，输出 intent、expression_mode、事件偏好、抑制原因和主动预算判断。 |
+| `D:\yunxi2.0\core\initiative\generator.py` | 主动消息生成上下文、LLM prompt、事件选题、人格约束 | `src/core/initiative/generator.py` + `YunxiPromptBuilder.build_proactive_prompt()` | 已完成 | P0 | `ProactiveGenerationContextBuilder` 只组装 prompt 素材；生成统一走真实 LLM，不恢复 sync/template fallback。 |
+| `D:\yunxi2.0\core\initiative\expression_context.py` | 关系感表达姿态，非模板化表达引导 | `src/core/initiative/expression_context.py` | 已完成 | P0 | 已迁移为 style guidance，覆盖低打扰、克制 follow-up、温柔关心、轻微吃醋等模式，不硬套固定句。 |
 | `D:\yunxi2.0\core\initiative\continuity.py` | relationship summary、open_threads、recent topics、unanswered proactive 等 | `src/core/initiative/continuity.py` | 部分实现 / 待补齐 | P0 | 3.0 目前只有短期窗口和未回复计数，需要持久化与开放话题。 |
 | `D:\yunxi2.0\core\initiative\realtime_search.py` | 动漫、音乐、电影、小说等实时兴趣搜索类别 | `src/core/initiative/realtime_search.py` | 待实现 | P1 | 先做本地事件库，后做网络实时话题；网络不可用时不能影响日常模式。 |
 | `D:\yunxi2.0\core\resident\presence.py` | 常驻循环、资源保护、游戏/勿扰、主动回调 | `src/core/resident/presence.py` | 部分实现 / 待补齐 | P1 | 3.0 已有 Presence 骨架，但还缺资源感知和更细的勿扰策略。 |
@@ -246,6 +246,8 @@ yunxi3.0 目前已经打通了 Runtime、LLM、MCP、Memory、HeartLake、主动
 4. 增加事件选择单元测试和真实 LLM 主动消息测试。
 
 ### P0-D：主动决策与生成上下文重建
+
+> **实现状态（2026-04-15）**：已完成。`InitiativeEngine` 已升级为多维主动决策，`src/core/initiative/expression_context.py` 已提供关系表达姿态，`src/core/initiative/generator.py` 已提供主动生成上下文组装器。主动 prompt 现在包含 persona、relationship、event、continuity、perception、emotion、decision、expression 和 generation boundary。
 
 1. 用多维 decider 替换当前偏简化规则。
 2. 接入 expression context。

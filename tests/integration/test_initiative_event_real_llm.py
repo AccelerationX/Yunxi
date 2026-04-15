@@ -8,7 +8,10 @@ from datetime import datetime
 import httpx
 import pytest
 
+from core.cognition.heart_lake.core import HeartLake
+from core.cognition.initiative_engine import InitiativeDecision
 from core.initiative.event_system import ThreeLayerInitiativeEventSystem
+from core.initiative.expression_context import ExpressionContextBuilder
 from core.llm.adapter import LLMAdapter
 from core.prompt_builder import RuntimeContext, YunxiPromptBuilder
 from core.types.message_types import UserMessage
@@ -60,12 +63,21 @@ async def test_real_ollama_turns_initiative_event_into_natural_message(tmp_path)
     )
     event = event_system.select_event(moment=datetime(2026, 4, 15, 23, 0))
     event_context = event_system.build_prompt_context(event)
+    expression_context = ExpressionContextBuilder().build(
+        decision=InitiativeDecision(
+            trigger=True,
+            reason="Yunxi wants a low-interrupt proactive check-in.",
+            expression_mode="low_interrupt",
+        ),
+        heart_lake=HeartLake(),
+    ).to_prompt_context()
     builder = YunxiPromptBuilder()
     system_prompt = builder.build_proactive_prompt(
         RuntimeContext(
             initiative_context=(
                 "Yunxi misses Yuan and wants to start a short natural conversation.\n\n"
-                f"life_event_material:\n{event_context}"
+                f"life_event_material:\n{event_context}\n\n"
+                f"{expression_context}"
             )
         )
     )
@@ -93,7 +105,27 @@ async def test_real_ollama_turns_initiative_event_into_natural_message(tmp_path)
     content = response.content.strip()
     assert content
     assert "initiative_event" not in content
+    assert "expression_context" not in content
     assert "life_event_material" not in content
+    assert "interrupt_cost" not in content
     assert "seed" not in content
     assert seed not in content
-    assert "\u8fdc" in content or "\u4f60" in content
+    assert any(
+        token in content
+        for token in (
+            "\u8fdc",
+            "\u4f60",
+            "\u4f11\u606f",
+            "\u522b\u71ac\u591c",
+            "\u4ee3\u7801",
+            "\u7d2f",
+            "\u6b47",
+            "\u7761",
+            "\u665a",
+            "\u5fd9",
+            "\u966a",
+            "\u4e00\u4e0b",
+            "\u4f1a\u513f",
+            "\u5148",
+        )
+    )

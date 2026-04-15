@@ -10,10 +10,12 @@ from typing import Any, Optional
 
 from core.cognition.heart_lake.core import HeartLake
 from core.cognition.heart_lake.updater import HeartLakeUpdater
-from core.cognition.initiative_engine import InitiativeEngine
+from core.cognition.initiative_engine import InitiativeDecision, InitiativeEngine
 from core.execution.engine import YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
-from core.initiative.event_system import ThreeLayerInitiativeEventSystem
+from core.initiative.event_system import InitiativeEventLayer, ThreeLayerInitiativeEventSystem
+from core.initiative.expression_context import ExpressionContextBuilder
+from core.initiative.generator import ProactiveGenerationContextBuilder
 from core.mcp.hub import MCPHub
 from core.prompt_builder import RuntimeContext, YunxiPromptBuilder
 from domains.memory.manager import MemoryManager
@@ -42,6 +44,8 @@ class YunxiRuntime:
         memory: MemoryManager,
         continuity: Optional[CompanionContinuityService] = None,
         initiative_event_system: Optional[ThreeLayerInitiativeEventSystem] = None,
+        expression_context_builder: Optional[ExpressionContextBuilder] = None,
+        generation_context_builder: Optional[ProactiveGenerationContextBuilder] = None,
         heart_lake_updater: Optional[HeartLakeUpdater] = None,
         initiative_engine: Optional[InitiativeEngine] = None,
         mcp_hub: Optional[MCPHub] = None,
@@ -53,6 +57,8 @@ class YunxiRuntime:
         self.memory = memory
         self.continuity = continuity or CompanionContinuityService()
         self.initiative_event_system = initiative_event_system
+        self.expression_context_builder = expression_context_builder or ExpressionContextBuilder()
+        self.generation_context_builder = generation_context_builder or ProactiveGenerationContextBuilder()
         self.heart_lake_updater = heart_lake_updater or HeartLakeUpdater(heart_lake)
         self.initiative_engine = initiative_engine or InitiativeEngine()
         self.mcp_hub = mcp_hub
@@ -88,16 +94,25 @@ class YunxiRuntime:
             events=events,
             current_time=time.time(),
             unanswered_proactive_count=self.continuity.unanswered_proactive_count,
+            perception_snapshot=self.perception.get_snapshot(),
+            continuity=self.continuity,
         )
 
         if not decision.trigger:
             return None
 
         context = self.get_context()
-        event_context = self._select_initiative_event_context()
-        context.initiative_context = self._build_initiative_context(
-            decision_reason=decision.reason,
+        event_context = self._select_initiative_event_context(decision)
+        expression_context = self.expression_context_builder.build(
+            decision=decision,
+            heart_lake=self.heart_lake,
+            continuity=self.continuity,
+            perception_snapshot=context.perception_snapshot,
+        ).to_prompt_context()
+        context.initiative_context = self.generation_context_builder.build(
+            decision=decision,
             event_context=event_context,
+            expression_context=expression_context,
         )
         system_prompt = self.prompt_builder.build_proactive_prompt(context)
 
@@ -116,22 +131,33 @@ class YunxiRuntime:
 
         return result.content
 
-    def _select_initiative_event_context(self) -> str:
+    def _select_initiative_event_context(self, decision: InitiativeDecision) -> str:
         """Select one life event as LLM context for proactive generation."""
-        if self.initiative_event_system is None:
+        if self.initiative_event_system is None or not decision.should_select_event:
             return ""
-        event = self.initiative_event_system.select_event()
+        preferred_layers = self._event_layers_from_decision(decision)
+        event = self.initiative_event_system.select_event(
+            preferred_layers=preferred_layers,
+            required_tags=decision.required_event_tags,
+        )
+        if event is None and decision.required_event_tags:
+            event = self.initiative_event_system.select_event(
+                preferred_layers=preferred_layers,
+            )
         return self.initiative_event_system.build_prompt_context(event)
 
-    def _build_initiative_context(self, decision_reason: str, event_context: str) -> str:
-        """Combine trigger reason and life-event material without script output."""
-        if not event_context:
-            return decision_reason
-        return (
-            f"{decision_reason}\n\n"
-            "life_event_material:\n"
-            f"{event_context}"
-        )
+    def _event_layers_from_decision(
+        self,
+        decision: InitiativeDecision,
+    ) -> list[InitiativeEventLayer]:
+        """Convert decision layer names into event-layer enum values."""
+        layers: list[InitiativeEventLayer] = []
+        for layer_name in decision.preferred_event_layers:
+            try:
+                layers.append(InitiativeEventLayer(layer_name))
+            except ValueError:
+                logger.warning("Unknown initiative event layer from decision: %s", layer_name)
+        return layers
 
     def _tick_perception_and_emotion(self) -> list:
         """刷新感知并更新情感状态，返回感知事件列表。"""
