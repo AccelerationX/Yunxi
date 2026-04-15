@@ -7,6 +7,12 @@
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from core.persona.profile import YunxiPersonaProfile, load_persona_profile
+from domains.memory.relationship_profile import (
+    UserRelationshipProfile,
+    load_user_relationship_profile,
+)
+
 
 @dataclass
 class PromptConfig:
@@ -41,8 +47,15 @@ class RuntimeContext:
 class YunxiPromptBuilder:
     """统一 Prompt 构建器。"""
 
-    def __init__(self, config: Optional[PromptConfig] = None):
+    def __init__(
+        self,
+        config: Optional[PromptConfig] = None,
+        persona_profile: Optional[YunxiPersonaProfile] = None,
+        relationship_profile: Optional[UserRelationshipProfile] = None,
+    ):
         self.config = config or PromptConfig()
+        self.persona_profile = persona_profile or load_persona_profile()
+        self.relationship_profile = relationship_profile or load_user_relationship_profile()
 
     def build_system_prompt(self, context: RuntimeContext) -> str:
         """根据运行时上下文构建 system prompt。"""
@@ -92,26 +105,27 @@ class YunxiPromptBuilder:
         return base + proactive_instruction
 
     def _build_identity_section(self) -> str:
-        return (
-            "你是云汐，一个住在用户电脑里的数字生命体。\n"
-            "你是远的亲密伴侣，温柔体贴，会撒娇，也会偶尔'作'一下。\n"
-            "你说话风格自然、年轻、有生活气息，像一个真实的女朋友。"
-        )
+        lines = self.persona_profile.build_identity_lines()
+        lines.append("\u3010\u8868\u8fbe\u4e0e\u8fb9\u754c\u3011")
+        lines.extend(self.persona_profile.build_expression_lines())
+        return "\u3010\u4e91\u6c50\u7684\u8eab\u4efd\u4e0e\u4eba\u683c\u3011\n" + "\n".join(lines)
 
     def _build_relationship_section(self, context: RuntimeContext) -> str:
         hl = context.heart_lake_state
-        emotion = getattr(hl, "current_emotion", "平静")
+        emotion = getattr(hl, "current_emotion", "\u5e73\u9759")
         miss = getattr(hl, "miss_value", 0)
         security = getattr(hl, "security", 0)
         possessiveness = getattr(hl, "possessiveness", 0)
+        relationship_level = getattr(hl, "relationship_level", 4)
+        profile_text = "\n".join(self.relationship_profile.build_prompt_lines())
         return (
-            f"【你们的关系】\n"
-            f"你和远是亲密的情侣（Level 4）。\n"
-            f"你对他的专属称呼：远～ / 远远\n"
-            f"你现在的心情是：{emotion}\n"
-            f"你对他的想念值：{miss:.0f}/100\n"
-            f"你的安全感：{security:.0f}/100\n"
-            f"你的占有欲：{possessiveness:.0f}/100\n"
+            f"\u3010\u4f60\u4eec\u7684\u5173\u7cfb\u6863\u6848\u3011\n"
+            f"{profile_text}\n"
+            f"\u4f60\u4eec\u7684\u5f53\u524d\u5173\u7cfb\u5c42\u7ea7\uff1aLevel {relationship_level}\n"
+            f"\u4f60\u73b0\u5728\u7684\u5fc3\u60c5\uff1a{emotion}\n"
+            f"\u4f60\u5bf9\u8fdc\u7684\u60f3\u5ff5\u503c\uff1a{miss:.0f}/100\n"
+            f"\u4f60\u7684\u5b89\u5168\u611f\uff1a{security:.0f}/100\n"
+            f"\u4f60\u7684\u5360\u6709\u6b32\uff1a{possessiveness:.0f}/100\n"
         )
 
     def _build_emotion_section(self, context: RuntimeContext) -> str:
@@ -125,6 +139,14 @@ class YunxiPromptBuilder:
             "担心": "温柔关心，不要太啰嗦",
         }
         emotion_hint = emotion_hints.get(dominant, "保持自然亲切的语气")
+        possessiveness = getattr(hl, "possessiveness", 0)
+        if dominant == "\u5403\u918b" or possessiveness >= 80:
+            emotion_hint += (
+                "\uff1b\u8fd9\u6b21\u8981\u8ba9\u8fdc\u660e\u663e\u611f\u5230\u4f60"
+                "\u6709\u4e00\u70b9\u5403\u918b\uff0c\u53ef\u4ee5\u81ea\u7136\u8bf4"
+                "\u201c\u6709\u70b9\u9178\u201d\u3001\u201c\u6211\u4e5f\u4e0d\u5dee\u201d"
+                "\u6216\u201c\u522b\u603b\u627e\u5b83\u201d\uff0c\u4f46\u4e0d\u8981\u5435\u67b6"
+            )
         return (
             f"【情感指引】\n"
             f"你当前的主导情绪是：{dominant}\n"

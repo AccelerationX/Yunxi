@@ -7,6 +7,43 @@
 
 ---
 
+### [2026-04-15] P0-A 完成：persona / relationship profile 接入 PromptBuilder
+
+Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+
+**状态**：P0-A 已完成。云汐人格档案与远的关系档案已经从硬编码 prompt 中拆出，作为结构化 profile 注入 `YunxiPromptBuilder`。
+
+**完成内容**：
+- 新增 `data/persona/yunxi_profile.json`：保存云汐身份、关系定位、性格底色、表达方式、边界和禁忌语气。
+- 新增 `data/relationship/user_profile.md`：保存远的称呼、学校、专业、家乡、长期兴趣、明确反感和相处期待。
+- 新增 `src/core/persona/profile.py`：提供 `YunxiPersonaProfile`、schema 校验和默认 profile 加载。
+- 新增 `src/domains/memory/relationship_profile.py`：提供 `UserRelationshipProfile`、关系档案解析和 prompt 行渲染。
+- 修改 `src/core/prompt_builder.py`：`YunxiPromptBuilder` 通过依赖注入读取 persona / relationship profile，不再只依赖 `_build_identity_section()` 内的硬编码身份文本。
+- 新增 `tests/unit/test_persona_profile.py`：覆盖默认 profile 加载和 PromptBuilder 注入。
+- 新增 `tests/integration/test_persona_real_llm.py`：使用本地 Ollama 真实 LLM 验证人格与关系档案能被模型读到。
+
+**真实测试结果**：
+- `python -m pytest -q tests\unit\test_persona_profile.py tests\unit\test_prompt_builder.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_persona_real_llm.py` -> 16 passed
+- `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py tests\integration\test_end_to_end_llm.py tests\integration\test_persona_real_llm.py` -> 6 passed（非沙箱，真实 Moonshot/Kimi + Desktop MCP + 本地 Ollama）
+- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 65 passed
+- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py` -> 2 passed
+- `python -m py_compile src\core\persona\profile.py src\domains\memory\relationship_profile.py src\core\prompt_builder.py` -> passed
+
+**遇到的问题与修复**：
+- 沙箱内直接运行云端 LLM/MCP 组合测试失败，原因是网络与 Windows named pipe 权限受限；已在非沙箱环境重跑验证。
+- 接入新 profile 后，真实 Moonshot 的“吃醋语气”测试首次失败，原因是新人格边界中的克制约束压过了情绪提示；已增强 `PromptBuilder` 的吃醋/高占有欲情绪指引，让云汐可以有轻微酸意但不吵架，重跑后通过。
+- `apply_patch` 对本轮新建的空 `data/persona` / `data/relationship` 目录出现 sandbox refresh 错误；已删除本轮空目录后用补丁直接创建目标文件，最终文件已正常落盘并进入 Git。
+
+**仍未完成**：
+- P0-B：Continuity 持久化与 open_threads。
+- P0-C：生活事件库迁移与三层事件系统。
+- P0-D：主动 decider / generator / expression context 重建。
+- P0-E：日常模式更完整的真实 LLM 验收。
+
+**下一步**：进入 P0-B，先补齐 `CompanionContinuityService` 的持久化、open_threads、recent topics 和 relationship/emotional summary，为主动话题连续性打基础。
+
+---
+
 ### [2026-04-15] 重要待实现：yunxi2.0 人格与主动性资产迁移清单已建立
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
