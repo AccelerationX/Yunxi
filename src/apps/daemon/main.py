@@ -164,6 +164,7 @@ async def run_daemon(config: DaemonConfig) -> None:
                 proactive_tick=runtime.proactive_tick,
                 on_proactive_message=on_proactive_message,
                 tick_interval=config.tick_interval,
+                memory_manager=runtime.memory,
             )
             presence.start()
             print("[云汐] 日常模式已启动，可以通过飞书和我聊天了～", flush=True)
@@ -184,6 +185,7 @@ async def run_daemon(config: DaemonConfig) -> None:
         proactive_tick=runtime.proactive_tick,
         on_proactive_message=on_proactive_message,
         tick_interval=config.tick_interval,
+        memory_manager=runtime.memory,
     )
     presence.start()
     try:

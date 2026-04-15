@@ -222,16 +222,74 @@ class YunxiExecutionEngine:
                 else results[-1].get("error", ""),
             )
 
-        if all_success:
-            response_text = "好呀，已经帮你弄好了～"
-        else:
-            response_text = (
-                f"哎呀，这个操作好像没成功，"
-                f"{results[-1].get('error', '不知道哪里出了问题')}"
-            )
+        response_text = self._select_skill_response(
+            skill_match=skill_match,
+            all_success=all_success,
+            last_error=results[-1].get("error") if results else None,
+        )
 
         self.context.add_assistant_message(response_text)
         return ExecutionResult(content=response_text, skill_used=skill_name)
+
+    def _select_skill_response(
+        self,
+        skill_match: Dict[str, Any],
+        all_success: bool,
+        last_error: Optional[str],
+    ) -> str:
+        """根据技能类型和执行结果选择情感化的回复变体。"""
+        if not all_success:
+            error_hint = last_error or "不知道哪里出了问题"
+            return f"哎呀，这个操作好像没成功，{error_hint}"
+
+        skill_name = skill_match.get("skill_name", "")
+        actions = skill_match.get("actions", [])
+        tool_name = actions[0].get("tool", "") if actions else ""
+
+        # 根据技能/工具类型选择成功回复变体
+        if "clipboard" in tool_name or "clipboard" in skill_name:
+            return self._pick_variant([
+                "好呀，已经复制好了～",
+                "搞定，剪贴板这边已经准备好了～",
+                "嗯嗯，复制好了，随时可以贴过去哦",
+            ], skill_name)
+        if "notify" in tool_name or "notification" in skill_name:
+            return self._pick_variant([
+                "通知已经发出去了～",
+                "好啦，通知已经送到了",
+                "嗯，已经提醒他了，应该很快能看到",
+            ], skill_name)
+        if "screenshot" in tool_name or "截图" in skill_name:
+            return self._pick_variant([
+                "截图好了～你要看看吗？",
+                "好呀，已经截下来了",
+                "截好了，看看是不是你想要的",
+            ], skill_name)
+        if "window" in tool_name or "focus" in tool_name or "minimize" in tool_name:
+            return self._pick_variant([
+                "好啦，窗口已经弄好了～",
+                "嗯，搞定了",
+                "已经帮你弄好了",
+            ], skill_name)
+        if "launch" in tool_name or "app" in tool_name:
+            return self._pick_variant([
+                "应用已经启动啦～",
+                "好呀，打开了哦",
+                "启动好了，慢慢用～",
+            ], skill_name)
+
+        # 默认变体
+        return self._pick_variant([
+            "好呀，已经帮你弄好了～",
+            "嗯嗯，搞定了～",
+            "好啦，已经处理好了",
+        ], skill_name)
+
+    def _pick_variant(self, variants: List[str], skill_name: str) -> str:
+        """从变体列表中基于 skill_name 哈希选择一个（确定性，利于测试）。"""
+        seed = sum(ord(c) for c in skill_name) if skill_name else 0
+        idx = seed % len(variants)
+        return variants[idx]
 
     def _add_chain_results_to_context(self, results: List[Dict[str, Any]]) -> None:
         """将 MCPHub 返回结果转为 ToolResultContentBlock 并加入上下文。"""

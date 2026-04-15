@@ -64,10 +64,18 @@ def desktop_notify(title: str, message: str) -> str:
         return f"[发送通知失败：{exc}]"
 
 
+# 重试配置
+_MAX_LAUNCH_RETRIES = 3
+_LAUNCH_RETRY_DELAYS = (1.5, 3.0, 5.0)  # 秒，逐次递增
+
+
 @mcp.tool()
 def app_launch_ui(app_name: str) -> str:
     """
     启动应用程序，并通过视觉断言验证屏幕是否发生变化。
+
+    采用递增等待重试策略：首次等待 1.5s，若未检测到变化则重试，
+    每次重试等待时间递增（1.5s → 3s → 5s），最多 3 次尝试。
 
     Args:
         app_name: 应用名（如 "notepad", "calc"）。
@@ -76,20 +84,29 @@ def app_launch_ui(app_name: str) -> str:
 
     driver = UIADriver()
     assertion = VisualAssertion()
+    last_error = ""
 
-    before = assertion.capture()
-    result = driver.launch_application(app_name)
-    time.sleep(1.5)
-    after = assertion.capture()
+    for attempt in range(_MAX_LAUNCH_RETRIES):
+        before = assertion.capture()
+        result = driver.launch_application(app_name)
+        wait_time = _LAUNCH_RETRY_DELAYS[attempt]
+        time.sleep(wait_time)
+        after = assertion.capture()
 
-    changed = assertion.pixel_diff(before, after, threshold=0.02)
-    if not changed:
-        return (
-            f"已尝试启动 {app_name}（路径：{result['resolved_path'] or 'shell'}），"
-            f"但屏幕未检测到显著变化，可能启动失败"
+        changed = assertion.pixel_diff(before, after, threshold=0.02)
+        if changed:
+            return f"成功启动 {app_name}"
+
+        last_error = (
+            f"路径：{result['resolved_path'] or 'shell'}，"
+            f"第 {attempt + 1} 次尝试屏幕未检测到显著变化"
         )
 
-    return f"成功启动 {app_name}"
+    # 所有重试均失败
+    return (
+        f"已尝试启动 {app_name}（{last_error}），"
+        f"可能是应用不存在或启动速度过慢，建议手动检查"
+    )
 
 
 @mcp.tool()
