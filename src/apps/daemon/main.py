@@ -10,6 +10,8 @@ from typing import Optional
 
 from apps.tray.web_server import RuntimeStatus, build_runtime_status
 from core.cognition.heart_lake.core import HeartLake
+from interfaces.feishu.adapter import FeishuAdapter
+from interfaces.feishu.websocket import FeishuWebSocket
 from core.execution.engine import EngineConfig, YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
 from core.initiative.event_system import ThreeLayerInitiativeEventSystem
@@ -36,6 +38,7 @@ class DaemonConfig:
     enable_tool_use: bool = True
     initialize_desktop_mcp: bool = True
     embedding_provider: Optional[str] = None
+    feishu_enabled: bool = False
 
 
 def load_dotenv(env_path: str = ".env") -> None:
@@ -133,6 +136,47 @@ async def run_daemon(config: DaemonConfig) -> None:
     """启动日常模式 daemon。"""
     runtime = await build_runtime(config)
 
+    feishu_ws: Optional[FeishuWebSocket] = None
+
+    if config.feishu_enabled:
+        # 使用飞书作为消息通道
+        from interfaces.feishu.client import get_feishu_client
+
+        feishu_client = get_feishu_client()
+        if not feishu_client.is_configured:
+            print("[警告] 飞书未配置或配置不完整，将使用 print 模式", flush=True)
+            config.feishu_enabled = False
+        else:
+            adapter = FeishuAdapter(runtime=runtime, feishu_client=feishu_client)
+            proactive_cb = adapter.create_proactive_callback()
+
+            async def on_proactive_message(message: str) -> None:
+                await proactive_cb(message)
+
+            def on_feishu_message(user_id: str, chat_id: str, content: str) -> None:
+                adapter.on_feishu_message(user_id, chat_id, content)
+
+            feishu_ws = FeishuWebSocket(on_message=on_feishu_message)
+            feishu_ws.start()
+            print("[飞书] WebSocket 已启动，等待消息...", flush=True)
+
+            presence = YunxiPresence(
+                proactive_tick=runtime.proactive_tick,
+                on_proactive_message=on_proactive_message,
+                tick_interval=config.tick_interval,
+            )
+            presence.start()
+            print("[云汐] 日常模式已启动，可以通过飞书和我聊天了～", flush=True)
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            finally:
+                await presence.stop()
+                feishu_ws.stop()
+                await close_runtime(runtime)
+            return
+
+    # 非飞书模式：使用 print
     async def on_proactive_message(message: str) -> None:
         print(message, flush=True)
 
@@ -172,9 +216,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--healthcheck", action="store_true")
     parser.add_argument("--disable-tool-use", action="store_true")
     parser.add_argument("--skip-desktop-mcp", action="store_true")
+    parser.add_argument("--feishu-enable", action="store_true", help="启用飞书消息通道")
     parser.add_argument(
         "--embedding-provider",
-        choices=["sentence_transformers", "lexical"],
+        choices=["sentence_transformers", "lexical", "ollama"],
         default=None,
     )
     return parser.parse_args()
@@ -193,6 +238,7 @@ async def async_main() -> None:
         enable_tool_use=not args.disable_tool_use,
         initialize_desktop_mcp=not args.skip_desktop_mcp,
         embedding_provider=args.embedding_provider,
+        feishu_enabled=args.feishu_enable,
     )
     if args.healthcheck:
         status = await run_healthcheck(config)

@@ -19,6 +19,53 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+class OllamaSkillEmbedder:
+    """Ollama /api/embeddings 接口封装，供 SkillLibrary 使用。"""
+
+    def __init__(
+        self,
+        model: str = "nomic-embed-text",
+        base_url: str = "http://localhost:11434",
+    ):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._client = None
+
+    async def initialize(self) -> None:
+        import httpx
+        if self._client is None:
+            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    def encode_sync(self, texts: List[str]) -> List[List[float]]:
+        """同步调用 Ollama embeddings（内部使用线程执行）。"""
+        import httpx
+        client = httpx.Client(base_url=self.base_url, timeout=30.0)
+        try:
+            embeddings: List[List[float]] = []
+            for text in texts:
+                response = client.post(
+                    "/api/embeddings",
+                    json={"model": self.model, "prompt": text},
+                )
+                response.raise_for_status()
+                data = response.json()
+                embedding = data.get("embedding", [])
+                if not embedding:
+                    raise RuntimeError(
+                        f"Ollama embedding returned empty for model {self.model}. "
+                        "Use a dedicated embedding model (e.g., nomic-embed-text)."
+                    )
+                embeddings.append(embedding)
+            return embeddings
+        finally:
+            client.close()
+
+
 class SkillLibrary:
     """技能库。"""
 
@@ -31,6 +78,7 @@ class SkillLibrary:
         self.db_path = db_path
         self.model_name = model_name
         self.model = None
+        self.ollama_embedder: Optional[OllamaSkillEmbedder] = None
         self.embedding_provider = embedding_provider or os.environ.get(
             "YUNXI_EMBEDDING_PROVIDER",
             "sentence_transformers",
@@ -58,9 +106,16 @@ class SkillLibrary:
             )
 
     async def initialize(self) -> None:
-        """异步初始化 Sentence-BERT 模型。"""
+        """异步初始化 embedding 模型。"""
         if self.embedding_provider == "lexical":
             self.model = None
+            return
+
+        if self.embedding_provider == "ollama":
+            ollama_model = os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+            ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            self.ollama_embedder = OllamaSkillEmbedder(model=ollama_model, base_url=ollama_base)
+            await self.ollama_embedder.initialize()
             return
 
         from sentence_transformers import SentenceTransformer
@@ -76,8 +131,11 @@ class SkillLibrary:
 
     def add_skill(self, skill: Dict[str, Any]) -> None:
         """添加或更新技能。"""
-        if self.model is None:
+        if self.model is None and self.ollama_embedder is None:
             avg_embedding = b""
+        elif self.ollama_embedder is not None:
+            embeddings = self.ollama_embedder.encode_sync(skill["trigger_patterns"])
+            avg_embedding = np.mean(embeddings, axis=0).astype(np.float32).tobytes()
         else:
             embeddings = self.model.encode(skill["trigger_patterns"])
             avg_embedding = np.mean(embeddings, axis=0).astype(np.float32).tobytes()
@@ -114,6 +172,9 @@ class SkillLibrary:
         if self.model is not None:
             query_vec = await asyncio.to_thread(self.model.encode, [query])
             query_vec = query_vec[0].astype(np.float32)
+        elif self.ollama_embedder is not None:
+            embeddings = self.ollama_embedder.encode_sync([query])
+            query_vec = np.array(embeddings[0], dtype=np.float32)
 
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute("SELECT * FROM skills").fetchall()
@@ -194,3 +255,9 @@ class SkillLibrary:
                 f"UPDATE skills SET {column} = {column} + 1 WHERE skill_name = ?",
                 (skill_name,),
             )
+
+    async def close(self) -> None:
+        """释放 Ollama embedder 资源。"""
+        if self.ollama_embedder is not None:
+            await self.ollama_embedder.close()
+            self.ollama_embedder = None

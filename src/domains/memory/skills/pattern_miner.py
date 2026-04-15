@@ -10,10 +10,54 @@ import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import httpx
 from sklearn.cluster import KMeans
 
 
 logger = logging.getLogger(__name__)
+
+
+class OllamaEmbedder:
+    """Ollama /api/embeddings 接口封装。"""
+
+    def __init__(
+        self,
+        model: str = "nomic-embed-text",
+        base_url: str = "http://localhost:11434",
+    ):
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def initialize(self) -> None:
+        if self._client is None:
+            self._client = httpx.AsyncClient(base_url=self.base_url, timeout=30.0)
+
+    async def close(self) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    async def encode(self, texts: List[str]) -> List[List[float]]:
+        """调用 Ollama embeddings 接口。"""
+        if self._client is None:
+            await self.initialize()
+        embeddings: List[List[float]] = []
+        for text in texts:
+            response = await self._client.post(
+                "/api/embeddings",
+                json={"model": self.model, "prompt": text},
+            )
+            response.raise_for_status()
+            data = response.json()
+            embedding = data.get("embedding", [])
+            if not embedding:
+                raise RuntimeError(
+                    f"Ollama embedding returned empty for model {self.model}. "
+                    "Use a dedicated embedding model (e.g., nomic-embed-text)."
+                )
+            embeddings.append(embedding)
+        return embeddings
 
 
 class PatternMiner:
@@ -26,15 +70,23 @@ class PatternMiner:
     ):
         self.model_name = model_name
         self.model = None
+        self.ollama_embedder: Optional[OllamaEmbedder] = None
         self.embedding_provider = embedding_provider or os.environ.get(
             "YUNXI_EMBEDDING_PROVIDER",
             "sentence_transformers",
         )
 
     async def initialize(self) -> None:
-        """异步初始化 Sentence-BERT 模型（避免阻塞事件循环）。"""
+        """异步初始化 embedding 模型（避免阻塞事件循环）。"""
         if self.embedding_provider == "lexical":
             self.model = None
+            return
+
+        if self.embedding_provider == "ollama":
+            ollama_model = os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+            ollama_base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            self.ollama_embedder = OllamaEmbedder(model=ollama_model, base_url=ollama_base)
+            await self.ollama_embedder.initialize()
             return
 
         from sentence_transformers import SentenceTransformer
@@ -55,12 +107,17 @@ class PatternMiner:
         if len(experiences) < min_cluster_size:
             return []
 
-        if self.model is None:
+        if self.model is None and self.ollama_embedder is None:
             return self._mine_by_lexical_groups(experiences, min_cluster_size)
 
         texts = [e["intent_text"] for e in experiences]
-        embeddings = await asyncio.to_thread(self.model.encode, texts)
-        embeddings = np.array(embeddings)
+
+        if self.ollama_embedder is not None:
+            embeddings_list = await self.ollama_embedder.encode(texts)
+            embeddings = np.array(embeddings_list)
+        else:
+            embeddings = await asyncio.to_thread(self.model.encode, texts)
+            embeddings = np.array(embeddings)
 
         n = len(experiences)
         k = min(max(2, int(np.sqrt(n))), n // min_cluster_size)
@@ -152,3 +209,9 @@ class PatternMiner:
         if "截图" in intent:
             return "screenshot"
         return intent[:8]
+
+    async def close(self) -> None:
+        """释放 Ollama embedder 资源。"""
+        if self.ollama_embedder is not None:
+            await self.ollama_embedder.close()
+            self.ollama_embedder = None

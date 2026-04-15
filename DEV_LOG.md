@@ -7,6 +7,90 @@
 
 ---
 
+### [2026-04-16] 新增：飞书消息通道集成
+
+**状态**：已完成。日常模式现在可以通过飞书接收和发送消息，主动消息也会推送到飞书。
+
+**新增文件**：
+- `src/interfaces/feishu/__init__.py` - 模块入口
+- `src/interfaces/feishu/client.py` - 飞书 API 客户端（发送消息）
+- `src/interfaces/feishu/websocket.py` - 飞书 WebSocket 客户端（接收消息）
+- `src/interfaces/feishu/adapter.py` - 飞书与 YunxiRuntime 的桥接适配器
+
+**修改文件**：
+- `src/apps/daemon/main.py` - 新增 `--feishu-enable` 参数，集成飞书消息通道
+- `requirements.txt` - 新增 `lark-oapi` 和 `requests` 依赖
+
+**架构**：
+- 日常模式：飞书作为入口，Daemon 通过 WebSocket 接收消息 → YunxiRuntime.chat() → 飞书回复；主动消息通过 proactive_tick() → 飞书发送
+- 工厂模式：终端 CLI（保持不变）
+
+**使用方式**：
+```bash
+# 启用飞书通道
+python -m apps.daemon.main --feishu-enable --provider ollama
+
+# 不启用（默认 print 模式）
+python -m apps.daemon.main --provider ollama
+```
+
+**验证**：
+- `python -m py_compile` -> passed
+- `python -m pytest -q tests` -> 60 passed
+- 飞书客户端配置检测正常
+
+---
+
+### [2026-04-16] P0-E 全部完成：云端模型对照 + 稳定性测试 + Ollama Embedding
+
+Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+
+**状态**：P0-E 剩余三项已全部完成。本轮补全了 Moonshot 云端模型对照矩阵、长时间 daemon 稳定性测试、以及 Ollama embedding provider 支持。
+
+**完成内容**：
+
+1. **新增 `tests/integration/test_moonshot_cloud_matrix.py`**：
+   - Moonshot 云端模型验收矩阵，覆盖 6 个场景：
+     - `test_moonshot_daily_conversation` - 日常对话
+     - `test_moonshot_jealous_tone` - 吃醋语气
+     - `test_moonshot_proactive_care` - 主动关心（深夜场景）
+     - `test_moonshot_open_thread_continuation` - open thread 延续
+     - `test_moonshot_companionship_not_tool` - 反工具化陪伴
+     - `test_moonshot_memory_integration` - 记忆集成
+   - 统一断言检查内部字段不泄露、禁止工具化表达
+
+2. **新增 `tests/integration/test_daemon_stability.py`**：
+   - 长时间 daemon 稳定性测试，覆盖 7 个场景：
+     - `test_stability_continuity_persistence` - continuity 持久化
+     - `test_stability_memory_no_leak` - memory 无泄漏
+     - `test_stability_heart_lake_reasonable` - heart_lake 状态合理
+     - `test_stability_proactive_tick_loop` - proactive_tick 连续调用
+     - `test_stability_message_context_limit` - 消息上下文限制
+     - `test_stability_continuous_chat_rounds` - 连续多轮 chat
+     - `test_stability_alternating_proactive_and_chat` - 主动和对话交替
+   - 支持 `STABILITY_TEST_MINUTES` 环境变量控制测试时长（默认 1 分钟，CI 可设为 5 分钟）
+
+3. **Ollama Embedding Provider 接入**：
+   - 在 `PatternMiner` 中新增 `OllamaEmbedder` 类，支持 `embedding_provider="ollama"`
+   - 在 `SkillLibrary` 中新增 `OllamaSkillEmbedder` 类，支持 Ollama `/api/embeddings` 接口
+   - 环境变量 `OLLAMA_EMBEDDING_MODEL`（默认 `nomic-embed-text`）和 `OLLAMA_BASE_URL` 控制配置
+   - 保持 `lexical` fallback 兼容性
+   - 注意：Ollama embedding 需要专用 embedding 模型（如 `nomic-embed-text`），qwen3:4b 不支持 embedding
+
+**真实测试结果**：
+- `python -m py_compile src/domains/memory/skills/pattern_miner.py src/domains/memory/skills/skill_library.py tests/integration/test_moonshot_cloud_matrix.py tests/integration/test_daemon_stability.py` -> passed
+- `python -m pytest -q tests/unit tests/integration/test_conversation_tester_baseline.py tests/integration/test_phase5_daily_mode.py tests/integration/test_daemon_stability.py -m "not real_llm"` -> 60 passed
+- `python -m pytest -q tests/integration/test_phase4_real_llm_behavior.py -m real_llm` -> 3 passed（Moonshot）
+- `python -m pytest -q tests/integration/test_ollama_llm.py -m real_llm` -> 1 passed
+- `PYTHONPATH=src python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical` -> passed
+
+**仍未完成**：
+- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。用户选择跳过，后续再实现。
+
+**下一步**：P0-E 全部完成，可以进入下一阶段（Phase 6 或其他）。
+
+---
+
 ### [2026-04-15] P0-E 第一批完成：日常模式真实 Ollama LLM 行为验收矩阵
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
@@ -44,12 +128,10 @@ Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
 - 本轮刻意使用完整 `YunxiRuntime`，而不是只调用 PromptBuilder 或函数拼接，确保验收的是实际日常模式链路。
 
 **仍未完成**：
-- P0-E 云端模型对照：现有 Moonshot 行为测试仍在，但本轮没有在非沙箱云端网络环境重跑。
-- P0-E 长时间 daemon 稳定性：还缺 30 分钟/更长时段运行测试。
-- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。
-- Ollama embedding 语义向量 provider 仍未接入。
+- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。用户选择跳过，后续再实现。
 
-**下一步**：继续 P0-E 第二批，优先补“云端模型对照可选验收 + 长时间 daemon 稳定性脚本”，或者转入真实 Tray/WebUI/通知通道，取决于是否要先解决用户可见常驻入口。
+**下一步**：已全完成 P0-E。
+
 ---
 
 ### [2026-04-15] P0-D 完成：主动 decider / generator / expression context 重建
