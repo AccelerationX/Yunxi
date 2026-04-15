@@ -1,0 +1,34 @@
+# 云汐 3.0 依赖配置
+
+# MCP 协议栈
+mcp>=1.12.0
+fastmcp
+
+# Web 服务
+aiohttp
+websockets
+
+# 桌面自动化与视觉
+pyautogui
+Pillow
+opencv-python
+uiautomation
+
+# 工具与系统
+pyperclip
+pystray
+psutil
+
+# 机器学习与聚类
+sentence-transformers
+scikit-learn
+numpy
+networkx
+
+# 数据与配置
+pydantic
+pyyaml
+
+# 开发测试
+pytest
+pytest-asyncio
