@@ -73,6 +73,13 @@ class MockLLMResponse:
         self.tool_calls = tool_calls or []
 
 
+class MockPerceptionProvider:
+    """Static perception provider for conversation tests."""
+
+    def fetch(self) -> PerceptionSnapshot:
+        return PerceptionSnapshot()
+
+
 class YunxiConversationTester:
     """对话验证框架核心类。"""
 
@@ -103,10 +110,10 @@ class YunxiConversationTester:
             llm=mock_llm,
             mcp_hub=mcp_hub,
             memory_manager=memory,
-            config=EngineConfig(enable_skill_fastpath=False),
+            config=EngineConfig(enable_tool_use=False, enable_skill_fastpath=False),
         )
         heart_lake = HeartLake()
-        perception = PerceptionCoordinator()
+        perception = PerceptionCoordinator(provider=MockPerceptionProvider())
 
         return YunxiRuntime(
             engine=engine,

@@ -10,6 +10,9 @@ from core.prompt_builder import RuntimeContext, YunxiPromptBuilder
 from core.types.message_types import UserMessage
 
 
+pytestmark = pytest.mark.real_llm
+
+
 def _ollama_models() -> list[str]:
     """Return local Ollama model names, or an empty list when unavailable."""
     try:

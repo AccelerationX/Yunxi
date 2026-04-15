@@ -5,5 +5,19 @@ from core.initiative.continuity import (
     ConversationExchange,
     OpenThread,
 )
+from core.initiative.event_system import (
+    InitiativeEvent,
+    InitiativeEventLayer,
+    ThreeLayerInitiativeEventSystem,
+    load_initiative_events,
+)
 
-__all__ = ["CompanionContinuityService", "ConversationExchange", "OpenThread"]
+__all__ = [
+    "CompanionContinuityService",
+    "ConversationExchange",
+    "InitiativeEvent",
+    "InitiativeEventLayer",
+    "OpenThread",
+    "ThreeLayerInitiativeEventSystem",
+    "load_initiative_events",
+]

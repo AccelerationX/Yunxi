@@ -27,6 +27,9 @@ from domains.memory.manager import MemoryManager
 from domains.perception.coordinator import PerceptionCoordinator
 
 
+pytestmark = [pytest.mark.real_llm, pytest.mark.desktop_mcp]
+
+
 def _load_env() -> None:
     """从 .env 文件加载环境变量（仅用于测试）。"""
     env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")

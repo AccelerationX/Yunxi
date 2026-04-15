@@ -17,6 +17,9 @@ from core.mcp import MCPClient, MCPHub, DAGPlanner, SecurityManager, AuditLogger
 from core.mcp.security import PermissionLevel
 
 
+pytestmark = pytest.mark.desktop_mcp
+
+
 @pytest_asyncio.fixture
 async def mcp_hub():
     client = MCPClient()

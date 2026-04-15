@@ -3,7 +3,7 @@
 > **定位**：修复主动性触发链路与生成路径的断裂，让云汐真正"会主动找你"。  
 > **核心原则**：主动性消息必须走 LLM 生成，必须能结合当前情感、感知、记忆数据。
 
-> **实现状态（2026-04-15）**：`YunxiRuntime.proactive_tick()` 已统一走 `YunxiPromptBuilder.build_proactive_prompt()` + `YunxiExecutionEngine` + 真实 LLM 路径，并通过 `tests/integration/test_phase4_real_llm_behavior.py` 验证主动消息由 Moonshot/Kimi 生成且只写入一次上下文。`Presence` 已在 `core/resident/presence.py` 落地，`Continuity` 已在 `core/initiative/continuity.py` 落地，并接入 Runtime。
+> **实现状态（2026-04-15）**：`YunxiRuntime.proactive_tick()` 已统一走 `YunxiPromptBuilder.build_proactive_prompt()` + `YunxiExecutionEngine` + 真实 LLM 路径。`Presence`、`Continuity` 已落地并接入 Runtime；P0-C 已完成，`data/initiative/life_events.json` 与 `core/initiative/event_system.py` 已提供三层生活事件素材并进入主动 prompt。本地 Ollama 真实 LLM 已验证事件素材可生成自然主动话题且不暴露内部字段。下一步仍需 P0-D：主动 decider / generator / expression context。
 
 ---
 
@@ -15,12 +15,12 @@ Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
 
 当前 3.0 的主动性实现已经避免了硬编码主动消息，并接入 `YunxiRuntime.proactive_tick()`、`YunxiPromptBuilder.build_proactive_prompt()` 和真实 LLM。但是，和 yunxi2.0 的完整设计相比，仍缺少以下核心资产：
 
-1. `data/life_events/life_events.json` 的生活事件库。
-2. `core/initiative/event_system.py` 的三层事件系统：内在生活、共同兴趣、混合事件。
-3. `core/initiative/decider.py` 中基于时间、情绪、presence、资源、每日预算、continuity 的决策模型。
-4. `core/initiative/generator.py` 中围绕事件、人格、关系和连续性组织主动生成上下文的能力。
-5. `core/initiative/expression_context.py` 的关系感表达姿态。
-6. `core/initiative/continuity.py` 中更完整的 open_threads、recent topics、relationship summary 和 unanswered proactive 状态。
+1. `data/life_events/life_events.json` 的生活事件库。（已迁入 `data/initiative/life_events.json`）
+2. `core/initiative/event_system.py` 的三层事件系统：内在生活、共同兴趣、混合事件。（已完成并接入 Runtime）
+3. `core/initiative/decider.py` 中基于时间、情绪、presence、资源、每日预算、continuity 的决策模型。（待实现 / P0-D）
+4. `core/initiative/generator.py` 中围绕事件、人格、关系和连续性组织主动生成上下文的能力。（待实现 / P0-D）
+5. `core/initiative/expression_context.py` 的关系感表达姿态。（待实现 / P0-D）
+6. `core/initiative/continuity.py` 中更完整的 open_threads、recent topics、relationship summary 和 unanswered proactive 状态。（已完成基础持久化，P0-D 继续接入主动决策）
 
 修复原则：
 

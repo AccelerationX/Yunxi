@@ -9,6 +9,9 @@ from core.llm.adapter import LLMAdapter
 from core.types.message_types import UserMessage
 
 
+pytestmark = pytest.mark.real_llm
+
+
 def _ollama_models() -> list[str]:
     try:
         response = httpx.get("http://localhost:11434/api/tags", timeout=3.0)

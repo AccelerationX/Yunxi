@@ -12,6 +12,7 @@ from apps.tray.web_server import RuntimeStatus, build_runtime_status
 from core.cognition.heart_lake.core import HeartLake
 from core.execution.engine import EngineConfig, YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
+from core.initiative.event_system import ThreeLayerInitiativeEventSystem
 from core.llm.adapter import LLMAdapter
 from core.mcp import AuditLogger, DAGPlanner, MCPClient, MCPHub, SecurityManager
 from core.mcp.security import PermissionLevel
@@ -29,6 +30,8 @@ class DaemonConfig:
     provider: str = "moonshot"
     memory_path: str = "data/memory"
     continuity_state_path: str = "data/runtime/continuity_state.json"
+    initiative_event_library_path: str = "data/initiative/life_events.json"
+    initiative_event_state_path: str = "data/runtime/initiative_event_state.json"
     tick_interval: float = 30.0
     enable_tool_use: bool = True
     initialize_desktop_mcp: bool = True
@@ -84,6 +87,10 @@ async def build_runtime(config: DaemonConfig) -> YunxiRuntime:
         memory=memory,
         continuity=CompanionContinuityService(
             storage_path=Path(config.continuity_state_path),
+        ),
+        initiative_event_system=ThreeLayerInitiativeEventSystem(
+            library_path=Path(config.initiative_event_library_path),
+            state_path=Path(config.initiative_event_state_path),
         ),
         mcp_hub=mcp_hub,
     )
@@ -159,6 +166,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", default="moonshot")
     parser.add_argument("--memory-path", default="data/memory")
     parser.add_argument("--continuity-state-path", default="data/runtime/continuity_state.json")
+    parser.add_argument("--initiative-event-library-path", default="data/initiative/life_events.json")
+    parser.add_argument("--initiative-event-state-path", default="data/runtime/initiative_event_state.json")
     parser.add_argument("--tick-interval", type=float, default=30.0)
     parser.add_argument("--healthcheck", action="store_true")
     parser.add_argument("--disable-tool-use", action="store_true")
@@ -178,6 +187,8 @@ async def async_main() -> None:
         provider=args.provider,
         memory_path=args.memory_path,
         continuity_state_path=args.continuity_state_path,
+        initiative_event_library_path=args.initiative_event_library_path,
+        initiative_event_state_path=args.initiative_event_state_path,
         tick_interval=args.tick_interval,
         enable_tool_use=not args.disable_tool_use,
         initialize_desktop_mcp=not args.skip_desktop_mcp,

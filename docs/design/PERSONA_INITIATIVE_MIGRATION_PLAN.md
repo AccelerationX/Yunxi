@@ -43,9 +43,9 @@ yunxi3.0 目前已经打通了 Runtime、LLM、MCP、Memory、HeartLake、主动
 | `D:\yunxi2.0\data\persona\personality_core.md` | 云汐人格核心说明 | `docs/design/PERSONA_INITIATIVE_MIGRATION_PLAN.md` + persona profile | 待实现 | P0 | 提炼为身份、表达方式、关系边界、禁忌表达。 |
 | `D:\yunxi2.0\data\persona\reaction_library.json` | 反应库和表达变体 | `data/persona/reaction_library.json` | 待实现 | P1 | 不能作为固定回复模板，只能作为 LLM style examples 或检索素材。 |
 | `D:\yunxi2.0\data\relationship\USER.md` | 用户档案：远的称呼、学校、专业、家乡、兴趣、讨厌的表达方式 | `data/relationship/user_profile.md` + `src/domains/memory/relationship_profile.py` | 待实现 | P0 | 必须进入 prompt 的关系 section 和长期记忆。 |
-| `D:\yunxi2.0\data\life_events\life_events.json` | 114 条生活化主动事件，含分类、模板、情绪 delta、时间规则、tags | `data/initiative/life_events.json` + `src/core/initiative/event_system.py` | 待实现 | P0 | 先清洗，再接入三层事件系统；模板只做事件素材，不直接输出。 |
+| `D:\yunxi2.0\data\life_events\life_events.json` | 114 条生活化主动事件，含分类、模板、情绪 delta、时间规则、tags | `data/initiative/life_events.json` + `src/core/initiative/event_system.py` | 已完成 | P0 | 已清洗迁入 114 条事件，模板仅作为 LLM prompt 素材，不直接输出。 |
 | `D:\yunxi2.0\data\initiative_events.json` | active_events、stats、主动事件运行状态 | `data/runtime/initiative_state.json` | 待实现 | P1 | 迁移状态结构，不直接迁移历史运行状态。 |
-| `D:\yunxi2.0\core\initiative\event_system.py` | 三层事件系统：内在生活、实时兴趣、混合事件 | `src/core/initiative/event_system.py` | 待实现 | P0 | 这是主动话题“像她自己想说”的核心，不应省略。 |
+| `D:\yunxi2.0\core\initiative\event_system.py` | 三层事件系统：内在生活、实时兴趣、混合事件 | `src/core/initiative/event_system.py` | 已完成 / 已接入 Runtime | P0 | 已实现 `inner_life`、`shared_interest`、`mixed` 三层选择、时间规则、冷却与持久化；后续 P0-D 继续接入更完整 decider/generator。 |
 | `D:\yunxi2.0\core\initiative\decider.py` | 时间、情绪、presence、资源、每日预算、连续性判断 | `src/core/initiative/decider.py` 或增强当前 `src/core/cognition/initiative_engine/engine.py` | 待实现 | P0 | 替换当前偏规则化的主动判断。 |
 | `D:\yunxi2.0\core\initiative\generator.py` | 主动消息生成上下文、LLM prompt、事件选题、人格约束 | `src/core/initiative/generator.py` + `YunxiPromptBuilder.build_proactive_prompt()` | 待实现 | P0 | 生成必须统一走真实 LLM，不恢复 sync/template fallback。 |
 | `D:\yunxi2.0\core\initiative\expression_context.py` | 关系感表达姿态，非模板化表达引导 | `src/core/initiative/expression_context.py` | 待实现 | P0 | 迁移为 style guidance，不允许硬套固定句。 |
@@ -237,6 +237,8 @@ yunxi3.0 目前已经打通了 Runtime、LLM、MCP、Memory、HeartLake、主动
 4. 增加重启恢复测试。
 
 ### P0-C：生活事件库与三层事件系统
+
+> **实现状态（2026-04-15）**：已完成。`data/initiative/life_events.json` 已迁入 114 条事件；`src/core/initiative/event_system.py` 已实现三层事件选择、时间规则、标签过滤、冷却、状态持久化，并已接入 `YunxiRuntime.proactive_tick()`。事件只作为 LLM prompt 素材，真实主动消息仍由 LLM 生成。
 
 1. 清洗迁入 `life_events.json`。
 2. 实现 event loader、time_rules、cooldown、active_events。

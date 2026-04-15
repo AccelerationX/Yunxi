@@ -26,6 +26,9 @@ from domains.perception.coordinator import (
 )
 
 
+pytestmark = pytest.mark.real_llm
+
+
 def _load_env() -> None:
     env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
     if not os.path.exists(env_path):

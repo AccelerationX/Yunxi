@@ -13,6 +13,7 @@ from core.cognition.heart_lake.updater import HeartLakeUpdater
 from core.cognition.initiative_engine import InitiativeEngine
 from core.execution.engine import YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
+from core.initiative.event_system import ThreeLayerInitiativeEventSystem
 from core.mcp.hub import MCPHub
 from core.prompt_builder import RuntimeContext, YunxiPromptBuilder
 from domains.memory.manager import MemoryManager
@@ -40,6 +41,7 @@ class YunxiRuntime:
         perception: PerceptionCoordinator,
         memory: MemoryManager,
         continuity: Optional[CompanionContinuityService] = None,
+        initiative_event_system: Optional[ThreeLayerInitiativeEventSystem] = None,
         heart_lake_updater: Optional[HeartLakeUpdater] = None,
         initiative_engine: Optional[InitiativeEngine] = None,
         mcp_hub: Optional[MCPHub] = None,
@@ -50,6 +52,7 @@ class YunxiRuntime:
         self.perception = perception
         self.memory = memory
         self.continuity = continuity or CompanionContinuityService()
+        self.initiative_event_system = initiative_event_system
         self.heart_lake_updater = heart_lake_updater or HeartLakeUpdater(heart_lake)
         self.initiative_engine = initiative_engine or InitiativeEngine()
         self.mcp_hub = mcp_hub
@@ -91,7 +94,11 @@ class YunxiRuntime:
             return None
 
         context = self.get_context()
-        context.initiative_context = decision.reason
+        event_context = self._select_initiative_event_context()
+        context.initiative_context = self._build_initiative_context(
+            decision_reason=decision.reason,
+            event_context=event_context,
+        )
         system_prompt = self.prompt_builder.build_proactive_prompt(context)
 
         # 主动触发使用空用户输入，由 system prompt 驱动生成
@@ -108,6 +115,23 @@ class YunxiRuntime:
             )
 
         return result.content
+
+    def _select_initiative_event_context(self) -> str:
+        """Select one life event as LLM context for proactive generation."""
+        if self.initiative_event_system is None:
+            return ""
+        event = self.initiative_event_system.select_event()
+        return self.initiative_event_system.build_prompt_context(event)
+
+    def _build_initiative_context(self, decision_reason: str, event_context: str) -> str:
+        """Combine trigger reason and life-event material without script output."""
+        if not event_context:
+            return decision_reason
+        return (
+            f"{decision_reason}\n\n"
+            "life_event_material:\n"
+            f"{event_context}"
+        )
 
     def _tick_perception_and_emotion(self) -> list:
         """刷新感知并更新情感状态，返回感知事件列表。"""
