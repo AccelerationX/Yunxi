@@ -256,6 +256,8 @@ yunxi3.0 目前已经打通了 Runtime、LLM、MCP、Memory、HeartLake、主动
 
 ### P0-E：日常模式真实验收
 
+> **实现状态（2026-04-15）**：第一批已完成。`tests/integration/test_daily_mode_real_llm_matrix.py` 使用本地 Ollama 构建真实 `YunxiRuntime`，覆盖克制 follow-up、open thread 延续和反工具化陪伴回复。仍待补齐云端模型对照、30 分钟 daemon 稳定性和真实发送通道。
+
 1. daemon 30 分钟稳定性测试。
 2. 主动消息真实发送通道测试。
 3. 用户忙碌、idle、刚回来、未回复、open thread 五类场景验收。

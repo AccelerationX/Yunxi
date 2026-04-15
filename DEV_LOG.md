@@ -7,6 +7,51 @@
 
 ---
 
+### [2026-04-15] P0-E 第一批完成：日常模式真实 Ollama LLM 行为验收矩阵
+
+Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+
+**状态**：P0-E 第一批已完成。本轮新增真实 Runtime + 本地 Ollama 的日常模式行为矩阵，覆盖主动克制 follow-up、open thread 延续、反工具化陪伴回复。测试不是函数级 smoke test，而是构建真实 `YunxiRuntime`，通过 `proactive_tick()` 和 `chat()` 调用真实本地 LLM。
+
+**完成内容**：
+- 新增 `tests/integration/test_daily_mode_real_llm_matrix.py`。
+- 测试使用真实 `LLMAdapter.from_env("ollama")`，并构建完整 `YunxiRuntime`：
+  - `YunxiExecutionEngine`
+  - `YunxiPromptBuilder`
+  - `HeartLake`
+  - `PerceptionCoordinator`
+  - `CompanionContinuityService`
+  - `ThreeLayerInitiativeEventSystem`
+  - `InitiativeEngine`
+- 覆盖 3 个真实 LLM 验收场景：
+  1. `restrained_followup`：之前已有一次主动未回复时，云汐主动消息必须短、克制、不追问、不泄露内部 prompt 字段。
+  2. `open_threads`：未完成话题进入主动链路，真实 LLM 生成自然延续，而不是定时器提醒。
+  3. `anti-toolification`：当远明确说“不想做任务，只想你陪我一下”时，云汐不能转成任务计划、步骤清单或工具调度口吻。
+- 真实输出断言统一检查：
+  - 非空。
+  - 不泄露 `initiative_event`、`life_event_material`、`expression_context`、`initiative_decision`、`generation_boundary`、`interrupt_cost`、`seed`。
+  - 不输出 `任务清单`、`计划如下`、`第一步`、`第二步`、`工具调用`、`执行步骤` 等工具化/规划化表达。
+
+**真实测试结果**：
+- `python -m py_compile tests\integration\test_daily_mode_real_llm_matrix.py` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_real_llm_matrix.py` -> 3 passed（本地 Ollama 真实 Runtime）
+- `python -m pytest -q tests -m "not real_llm and not desktop_mcp"` -> 80 passed, 16 deselected
+- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py tests\integration\test_initiative_event_real_llm.py tests\integration\test_daily_mode_real_llm_matrix.py` -> 6 passed（本地 Ollama 真实 LLM）
+- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical --continuity-state-path data\runtime\continuity_state_test.json --initiative-event-state-path data\runtime\initiative_event_state_test.json` -> passed
+
+**遇到的问题与处理**：
+- 真实 LLM 输出具有自然波动，不能用单一关键词硬判。测试断言采用“内部字段禁止 + 工具化表达禁止 + 场景语义宽匹配”的方式，避免把真实模型验收写成脆弱模板匹配。
+- 本轮刻意使用完整 `YunxiRuntime`，而不是只调用 PromptBuilder 或函数拼接，确保验收的是实际日常模式链路。
+
+**仍未完成**：
+- P0-E 云端模型对照：现有 Moonshot 行为测试仍在，但本轮没有在非沙箱云端网络环境重跑。
+- P0-E 长时间 daemon 稳定性：还缺 30 分钟/更长时段运行测试。
+- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。
+- Ollama embedding 语义向量 provider 仍未接入。
+
+**下一步**：继续 P0-E 第二批，优先补“云端模型对照可选验收 + 长时间 daemon 稳定性脚本”，或者转入真实 Tray/WebUI/通知通道，取决于是否要先解决用户可见常驻入口。
+---
+
 ### [2026-04-15] P0-D 完成：主动 decider / generator / expression context 重建
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
@@ -218,12 +263,12 @@ Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
 | 字段 | 当前值 |
 |------|--------|
 | **当前 Phase** | Phase 4.5 / Phase 5 Hardening |
-| **当前聚焦模块** | P0-E 日常模式真实 LLM 验收矩阵 |
+| **当前聚焦模块** | P0-E 第二批：云端对照 / 长时间 daemon / 真实发送通道 |
 | **最近一次更新** | 2026-04-15 |
-| **当前状态** | P0-A/P0-B/P0-C/P0-D 已完成：人格/关系档案、Continuity 持久化、生活事件库、三层事件系统、多维主动决策、表达姿态和生成上下文已接入；Phase 5 仍不能视为完成 |
-| **当前阻塞** | P0-E：真实 LLM 验收矩阵不足；Tray/WebUI 未真实接入；Ollama embedding 语义向量未接入 |
-| **下一步计划** | 1. P0-E 补真实 LLM 行为验收矩阵 2. 覆盖克制 follow-up 和反工具化 3. Ollama embedding 语义向量 provider 4. 接入真实 Tray/WebUI |
-| **最近通过测试** | 常规回归 80 passed, 13 deselected；本地 Ollama 真实 LLM 3 passed；daemon Ollama healthcheck passed |
+| **当前状态** | P0-A/P0-B/P0-C/P0-D 已完成；P0-E 本地 Ollama 真实 Runtime 行为矩阵已完成；Phase 5 仍不能视为完成 |
+| **当前阻塞** | P0-E：云端模型对照与长时间 daemon 稳定性未完成；Tray/WebUI 未真实接入；Ollama embedding 语义向量未接入 |
+| **下一步计划** | 1. P0-E 云端模型对照可选验收 2. 长时间 daemon 稳定性脚本 3. 真实 Tray/WebUI/通知通道 4. Ollama embedding 语义向量 provider |
+| **最近通过测试** | 常规回归 80 passed, 16 deselected；本地 Ollama 真实 LLM 6 passed；daemon Ollama healthcheck passed |
 | **风险标记** | 之前“正式进入 Phase 5”的判断过早；当前必须先做 Phase 0-5 设计一致性修复 |
 
 ---

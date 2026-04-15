@@ -3,7 +3,7 @@
 > **定位**：修复主动性触发链路与生成路径的断裂，让云汐真正"会主动找你"。  
 > **核心原则**：主动性消息必须走 LLM 生成，必须能结合当前情感、感知、记忆数据。
 
-> **实现状态（2026-04-15）**：`YunxiRuntime.proactive_tick()` 已统一走 `YunxiPromptBuilder.build_proactive_prompt()` + `YunxiExecutionEngine` + 真实 LLM 路径。`Presence`、`Continuity`、三层事件系统、多维主动决策、expression context 和 proactive generation context 已落地并接入 Runtime。本地 Ollama 真实 LLM 已验证事件素材与表达姿态可生成自然主动话题且不暴露内部字段。下一步进入 P0-E：日常模式真实 LLM 验收矩阵。
+> **实现状态（2026-04-15）**：`YunxiRuntime.proactive_tick()` 已统一走 `YunxiPromptBuilder.build_proactive_prompt()` + `YunxiExecutionEngine` + 真实 LLM 路径。`Presence`、`Continuity`、三层事件系统、多维主动决策、expression context 和 proactive generation context 已落地并接入 Runtime。本地 Ollama 真实 LLM 已验证事件素材与表达姿态可生成自然主动话题且不暴露内部字段；P0-E 第一批真实 Runtime 行为矩阵已覆盖克制 follow-up、open thread 延续和反工具化陪伴回复。剩余为云端模型对照、长时间 daemon 和真实发送通道。
 
 ---
 
