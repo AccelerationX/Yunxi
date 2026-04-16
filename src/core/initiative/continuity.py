@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -80,6 +81,41 @@ class OpenThread:
 
 
 @dataclass
+class InitiativeEventRecord:
+    """A selected proactive event recorded for relationship continuity."""
+
+    event_id: str
+    category: str
+    seed: str
+    affect_valence: float = 0.0
+    affect_arousal: float = 0.0
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize the event record to JSON-compatible data."""
+        return {
+            "event_id": self.event_id,
+            "category": self.category,
+            "seed": self.seed,
+            "affect_valence": self.affect_valence,
+            "affect_arousal": self.affect_arousal,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "InitiativeEventRecord":
+        """Deserialize an initiative event record."""
+        return cls(
+            event_id=str(data.get("event_id", "")),
+            category=str(data.get("category", "")),
+            seed=str(data.get("seed", "")),
+            affect_valence=float(data.get("affect_valence", 0.0)),
+            affect_arousal=float(data.get("affect_arousal", 0.0)),
+            timestamp=float(data.get("timestamp", time.time())),
+        )
+
+
+@dataclass
 class CompanionContinuityService:
     """Maintain recent conversation, open threads, and persistent summaries."""
 
@@ -88,10 +124,12 @@ class CompanionContinuityService:
     exchanges: List[ConversationExchange] = field(default_factory=list)
     unanswered_proactive_count: int = 0
     recent_proactive_count: int = 0
+    proactive_count_date: str = ""
     relationship_summary: str = ""
     emotional_summary: str = ""
     user_style_summary: str = ""
     open_threads: List[OpenThread] = field(default_factory=list)
+    initiative_events: List[InitiativeEventRecord] = field(default_factory=list)
     proactive_cues: List[str] = field(default_factory=list)
     recent_topics: List[str] = field(default_factory=list)
     user_returned_recently: bool = False
@@ -104,6 +142,8 @@ class CompanionContinuityService:
             self.storage_path = Path(self.storage_path)
         if self.storage_path is not None and self.storage_path.exists():
             self._load()
+        if not self.proactive_count_date:
+            self.proactive_count_date = _date_key()
 
     def record_exchange(
         self,
@@ -120,6 +160,7 @@ class CompanionContinuityService:
             )
         )
         if proactive:
+            self.refresh_daily_proactive_count()
             self.unanswered_proactive_count += 1
             self.recent_proactive_count += 1
         elif user_message:
@@ -133,6 +174,17 @@ class CompanionContinuityService:
     def record_assistant_message(self, message: str, proactive: bool = False) -> None:
         """Record an assistant message without a paired user input."""
         self.record_exchange("", message, proactive=proactive)
+
+    def refresh_daily_proactive_count(self, current_time: Optional[float] = None) -> None:
+        """Reset proactive budget counter when the local date changes."""
+        today = _date_key(current_time)
+        if not self.proactive_count_date:
+            self.proactive_count_date = today
+            return
+        if self.proactive_count_date != today:
+            self.proactive_count_date = today
+            self.recent_proactive_count = 0
+            self.save()
 
     def add_open_thread(self, title: str, detail: str = "") -> None:
         """Add or update an unfinished conversation thread."""
@@ -183,6 +235,65 @@ class CompanionContinuityService:
         if clean_cue not in self.proactive_cues:
             self.proactive_cues.append(clean_cue)
             self.proactive_cues = self.proactive_cues[-DEFAULT_MAX_RECENT_TOPICS:]
+            self.save()
+
+    def record_initiative_event(
+        self,
+        *,
+        event_id: str,
+        category: str,
+        seed: str,
+        affect_valence: float = 0.0,
+        affect_arousal: float = 0.0,
+    ) -> None:
+        """Record a selected initiative event for continuity."""
+        clean_seed = seed.strip()
+        if not clean_seed:
+            return
+        record = InitiativeEventRecord(
+            event_id=event_id.strip(),
+            category=category.strip(),
+            seed=clean_seed[:160],
+            affect_valence=affect_valence,
+            affect_arousal=affect_arousal,
+        )
+        self.initiative_events.append(record)
+        self.initiative_events = self.initiative_events[-DEFAULT_MAX_RECENT_TOPICS:]
+        self._capture_recent_topic(f"initiative:{record.category}:{record.seed}")
+        self.save()
+
+    def capture_user_continuity(self, user_message: str) -> None:
+        """Extract conservative continuity cues from one user message."""
+        text = user_message.strip()
+        if not text:
+            return
+
+        changed = False
+        if any(token in text for token in ("累", "难过", "焦虑", "崩溃", "压力", "撑不住", "睡不着", "失眠")):
+            self.comfort_needed = True
+            changed = True
+        if any(token in text for token in ("改代码", "修复", "排查", "测试", "部署", "方案", "规划")):
+            self.task_focus = _compact_text(text, 80)
+            changed = True
+
+        future_tokens = ("明天", "下次", "回头", "之后", "晚点", "待会", "一会儿", "以后")
+        action_tokens = ("提醒", "继续", "再聊", "看看", "处理", "记得", "跟进", "复盘")
+        if any(token in text for token in future_tokens) and any(token in text for token in action_tokens):
+            title = _compact_text(text, 60)
+            detail = _compact_text(f"远提到：{text}", 120)
+            self._add_or_update_open_thread(title, detail)
+            self._add_proactive_cue_if_missing(title)
+            changed = True
+        elif "别忘" in text or "记得提醒" in text:
+            cue = _compact_text(text, 80)
+            self._add_proactive_cue_if_missing(cue)
+            changed = True
+
+        if "碎片" in text or "先不展开" in text:
+            self.fragmented_chat = True
+            changed = True
+
+        if changed:
             self.save()
 
     def update_summaries(
@@ -242,6 +353,10 @@ class CompanionContinuityService:
             lines.append("recent_topics: " + " / ".join(self.recent_topics[-6:]))
         if self.proactive_cues:
             lines.append("proactive_cues: " + " / ".join(self.proactive_cues[-6:]))
+        if self.initiative_events:
+            lines.append("recent_initiative_events:")
+            for event in self.initiative_events[-3:]:
+                lines.append(f"- {event.category}: {event.seed}")
 
         if self.comfort_needed:
             lines.append("comfort_needed: true")
@@ -263,10 +378,12 @@ class CompanionContinuityService:
         self.exchanges.clear()
         self.unanswered_proactive_count = 0
         self.recent_proactive_count = 0
+        self.proactive_count_date = _date_key()
         self.relationship_summary = ""
         self.emotional_summary = ""
         self.user_style_summary = ""
         self.open_threads.clear()
+        self.initiative_events.clear()
         self.proactive_cues.clear()
         self.recent_topics.clear()
         self.user_returned_recently = False
@@ -296,10 +413,12 @@ class CompanionContinuityService:
             "exchanges": [exchange.to_dict() for exchange in self.exchanges],
             "unanswered_proactive_count": self.unanswered_proactive_count,
             "recent_proactive_count": self.recent_proactive_count,
+            "proactive_count_date": self.proactive_count_date,
             "relationship_summary": self.relationship_summary,
             "emotional_summary": self.emotional_summary,
             "user_style_summary": self.user_style_summary,
             "open_threads": [thread.to_dict() for thread in self.open_threads],
+            "initiative_events": [event.to_dict() for event in self.initiative_events],
             "proactive_cues": self.proactive_cues,
             "recent_topics": self.recent_topics,
             "user_returned_recently": self.user_returned_recently,
@@ -329,12 +448,18 @@ class CompanionContinuityService:
         ]
         self.unanswered_proactive_count = int(data.get("unanswered_proactive_count", 0))
         self.recent_proactive_count = int(data.get("recent_proactive_count", 0))
+        self.proactive_count_date = str(data.get("proactive_count_date", "")) or _date_key()
         self.relationship_summary = str(data.get("relationship_summary", ""))
         self.emotional_summary = str(data.get("emotional_summary", ""))
         self.user_style_summary = str(data.get("user_style_summary", ""))
         self.open_threads = [
             OpenThread.from_dict(item)
             for item in data.get("open_threads", [])
+            if isinstance(item, dict)
+        ]
+        self.initiative_events = [
+            InitiativeEventRecord.from_dict(item)
+            for item in data.get("initiative_events", [])
             if isinstance(item, dict)
         ]
         self.proactive_cues = _string_list(data.get("proactive_cues", []))
@@ -359,11 +484,50 @@ class CompanionContinuityService:
         if len(self.exchanges) > self.max_exchanges:
             self.exchanges = self.exchanges[-self.max_exchanges :]
         self.open_threads = self.open_threads[-DEFAULT_MAX_OPEN_THREADS:]
+        self.initiative_events = self.initiative_events[-DEFAULT_MAX_RECENT_TOPICS:]
         self.recent_topics = self.recent_topics[-DEFAULT_MAX_RECENT_TOPICS:]
         self.proactive_cues = self.proactive_cues[-DEFAULT_MAX_RECENT_TOPICS:]
+
+    def _add_or_update_open_thread(self, title: str, detail: str = "") -> None:
+        clean_title = title.strip()
+        if not clean_title:
+            return
+        now = time.time()
+        for thread in self.open_threads:
+            if thread.title == clean_title:
+                thread.detail = detail.strip() or thread.detail
+                thread.status = "open"
+                thread.updated_at = now
+                return
+        self.open_threads.append(
+            OpenThread(
+                title=clean_title,
+                detail=detail.strip(),
+                status="open",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        self.open_threads = self.open_threads[-DEFAULT_MAX_OPEN_THREADS:]
+
+    def _add_proactive_cue_if_missing(self, cue: str) -> None:
+        clean_cue = cue.strip()
+        if clean_cue and clean_cue not in self.proactive_cues:
+            self.proactive_cues.append(clean_cue)
+            self.proactive_cues = self.proactive_cues[-DEFAULT_MAX_RECENT_TOPICS:]
 
 
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item).strip()]
+
+
+def _date_key(timestamp: Optional[float] = None) -> str:
+    moment = datetime.fromtimestamp(timestamp if timestamp is not None else time.time())
+    return moment.date().isoformat()
+
+
+def _compact_text(text: str, limit: int) -> str:
+    compacted = " ".join(text.strip().split())
+    return compacted[:limit]

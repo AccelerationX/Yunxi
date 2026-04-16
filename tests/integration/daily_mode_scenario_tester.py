@@ -317,12 +317,9 @@ class DailyModeScenarioTester:
         provider = getattr(getattr(self.runtime.engine, "llm", None), "provider", None)
         if provider is not None:
             await provider.close()
-        pattern_close = getattr(self.runtime.memory.pattern_miner, "close", None)
-        if pattern_close is not None:
-            await pattern_close()
-        library_close = getattr(self.runtime.memory.skill_library, "close", None)
-        if library_close is not None:
-            await library_close()
+        memory_close = getattr(self.runtime.memory, "close", None)
+        if memory_close is not None:
+            await memory_close()
 
     async def chat(self, user_input: str) -> str:
         """Send a user message to Yunxi."""

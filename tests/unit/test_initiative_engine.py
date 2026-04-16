@@ -37,6 +37,7 @@ def test_engine_suppresses_when_daily_budget_is_exhausted():
     heart.current_emotion = "想念"
     heart.miss_value = 95
     continuity = CompanionContinuityService()
+    continuity.proactive_count_date = "1970-01-01"
     continuity.recent_proactive_count = 5
     engine = InitiativeEngine(cooldown_seconds=0, daily_budget=5)
 
@@ -50,6 +51,27 @@ def test_engine_suppresses_when_daily_budget_is_exhausted():
     assert decision.trigger is False
     assert decision.suppression_reason == "daily_budget_exhausted"
     assert decision.should_select_event is False
+
+
+def test_engine_resets_stale_daily_budget_before_evaluating():
+    heart = HeartLake()
+    heart.current_emotion = "想念"
+    heart.miss_value = 95
+    continuity = CompanionContinuityService()
+    continuity.proactive_count_date = "2026-04-15"
+    continuity.recent_proactive_count = 5
+    engine = InitiativeEngine(cooldown_seconds=0, daily_budget=5)
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1776268800.0,  # 2026-04-16
+        continuity=continuity,
+    )
+
+    assert decision.trigger is True
+    assert continuity.proactive_count_date == "2026-04-16"
+    assert continuity.recent_proactive_count == 0
 
 
 def test_engine_marks_restrained_followup_after_unanswered_message():

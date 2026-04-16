@@ -51,3 +51,24 @@ def test_recent_topics_are_captured_and_deduplicated():
 
     assert continuity.recent_topics[-1] == "check proactive topics"
     assert continuity.recent_topics.count("talk about long memory") == 1
+
+
+def test_daily_proactive_count_resets_on_new_date():
+    continuity = CompanionContinuityService()
+    continuity.proactive_count_date = "2026-04-15"
+    continuity.recent_proactive_count = 5
+
+    continuity.refresh_daily_proactive_count(1776268800.0)  # 2026-04-16
+
+    assert continuity.proactive_count_date == "2026-04-16"
+    assert continuity.recent_proactive_count == 0
+
+
+def test_capture_user_continuity_adds_open_thread_and_cue():
+    continuity = CompanionContinuityService()
+
+    continuity.capture_user_continuity("明天提醒我继续看部署方案，别忘了")
+
+    assert continuity.get_open_threads()
+    assert continuity.proactive_cues
+    assert continuity.task_focus

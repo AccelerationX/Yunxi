@@ -14,7 +14,11 @@ from core.cognition.heart_lake.updater import HeartLakeUpdater
 from core.cognition.initiative_engine import InitiativeDecision, InitiativeEngine
 from core.execution.engine import YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
-from core.initiative.event_system import InitiativeEventLayer, ThreeLayerInitiativeEventSystem
+from core.initiative.event_system import (
+    InitiativeEvent,
+    InitiativeEventLayer,
+    ThreeLayerInitiativeEventSystem,
+)
 from core.initiative.expression_context import ExpressionContextBuilder
 from core.initiative.generator import ProactiveGenerationContextBuilder
 from core.mcp.hub import MCPHub
@@ -89,6 +93,7 @@ class YunxiRuntime:
             assistant_message=result.content,
             proactive=False,
         )
+        self._capture_relationship_continuity(user_input, result.content)
         if result.content:
             self.heart_lake_updater.on_interaction_completed()
         return result.content
@@ -114,7 +119,9 @@ class YunxiRuntime:
             return None
 
         context = self.get_context()
-        event_context = self._select_initiative_event_context(decision)
+        event = self._select_initiative_event(decision)
+        self._apply_initiative_event(event)
+        event_context = self._build_initiative_event_context(event)
         expression_context = self.expression_context_builder.build(
             decision=decision,
             heart_lake=self.heart_lake,
@@ -143,10 +150,10 @@ class YunxiRuntime:
 
         return result.content
 
-    def _select_initiative_event_context(self, decision: InitiativeDecision) -> str:
-        """Select one life event as LLM context for proactive generation."""
+    def _select_initiative_event(self, decision: InitiativeDecision) -> InitiativeEvent | None:
+        """Select one life event for proactive generation."""
         if self.initiative_event_system is None or not decision.should_select_event:
-            return ""
+            return None
         preferred_layers = self._event_layers_from_decision(decision)
         event = self.initiative_event_system.select_event(
             preferred_layers=preferred_layers,
@@ -156,7 +163,38 @@ class YunxiRuntime:
             event = self.initiative_event_system.select_event(
                 preferred_layers=preferred_layers,
             )
+        return event
+
+    def _build_initiative_event_context(self, event: InitiativeEvent | None) -> str:
+        """Build selected life event prompt context."""
+        if self.initiative_event_system is None:
+            return ""
         return self.initiative_event_system.build_prompt_context(event)
+
+    def _apply_initiative_event(self, event: InitiativeEvent | None) -> None:
+        """Apply selected event affect and persist continuity context."""
+        if event is None:
+            return
+        self.heart_lake.apply_affect_delta(
+            valence=event.affect_delta.valence,
+            arousal=event.affect_delta.arousal,
+        )
+        self.continuity.record_initiative_event(
+            event_id=event.event_id,
+            category=event.category,
+            seed=event.seed,
+            affect_valence=event.affect_delta.valence,
+            affect_arousal=event.affect_delta.arousal,
+        )
+
+    def _capture_relationship_continuity(
+        self,
+        user_input: str,
+        assistant_message: str,
+    ) -> None:
+        """Capture durable memory and continuity cues after a normal chat turn."""
+        self.memory.capture_relationship_memory(user_input, assistant_message)
+        self.continuity.capture_user_continuity(user_input)
 
     def _event_layers_from_decision(
         self,

@@ -148,6 +148,50 @@ async def test_proactive_tick_injects_life_event_material(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_proactive_event_affect_delta_updates_heart_lake_and_continuity(tmp_path):
+    tester = YunxiConversationTester()
+    tester.reset()
+    library_path = tmp_path / "events.json"
+    library_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "care_event_1",
+                    "layer": "mixed",
+                    "category": "care",
+                    "seed": "Yunxi notices Yuan may be tired and wants to check in softly.",
+                    "affect_delta": {"valence": -0.8, "arousal": 0.8},
+                    "tags": ["care"],
+                    "cooldown_seconds": 3600,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    tester.runtime.initiative_event_system = ThreeLayerInitiativeEventSystem(
+        library_path=library_path,
+        state_path=tmp_path / "event_state.json",
+        rng=random.Random(1),
+    )
+    tester.set_heart_lake(emotion="想念", miss_value=95, security=80)
+    tester.runtime.perception.inject_snapshot(
+        PerceptionSnapshot(
+            time_context=TimeContext(readable_time="2026-04-16 23:30", hour=23),
+            user_presence=UserPresence(idle_duration=360),
+        )
+    )
+    tester.runtime.engine.llm.add_response("远，先停一下。我有点担心你。")
+
+    proactive = await tester.runtime.proactive_tick()
+
+    assert proactive is not None
+    assert tester.runtime.heart_lake.current_emotion == "担心"
+    assert tester.runtime.heart_lake.security < 80
+    assert tester.runtime.continuity.initiative_events[-1].event_id == "care_event_1"
+
+
+@pytest.mark.asyncio
 async def test_runtime_serializes_concurrent_chat_entries():
     tester = YunxiConversationTester()
     tester.reset()

@@ -74,6 +74,25 @@ class HeartLake:
         """判断当前情感状态是否值得主动发起对话。"""
         return self.miss_value >= 70 or self.current_emotion in ("想念", "担心")
 
+    def apply_affect_delta(
+        self,
+        *,
+        valence: float = 0.0,
+        arousal: float = 0.0,
+    ) -> None:
+        """Apply event-driven affect delta from proactive life events."""
+        self.security = min(100.0, max(0.0, self.security + valence * 4.0))
+        self.miss_value = min(100.0, max(0.0, self.miss_value + arousal * 3.0))
+
+        if valence <= -0.4 and arousal >= 0.4:
+            self.current_emotion = "担心"
+        elif valence <= -0.4:
+            self.current_emotion = "委屈"
+        elif arousal >= 0.6:
+            self.current_emotion = "想念"
+        elif valence >= 0.5:
+            self.current_emotion = "开心"
+
     def get_proactive_reason(self) -> str:
         """获取主动触发的情感原因描述。"""
         if self.current_emotion == "想念":

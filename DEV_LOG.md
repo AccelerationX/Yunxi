@@ -7,6 +7,53 @@
 
 ---
 
+## [2026-04-16] 阶段 3 完成：主动预算、长期关系记忆和连续性沉淀
+
+**状态**：已完成首版。阶段 3 目标是让云汐的主动性和长期关系状态不再只依赖进程内临时变量。
+
+### 完成内容
+
+- `CompanionContinuityService` 新增 `proactive_count_date`：
+  - `recent_proactive_count` 按本地日期归属。
+  - `InitiativeEngine.evaluate()` 前会刷新日期，跨天自动恢复主动预算。
+- `MemoryManager` 新增持久化关系记忆：
+  - 偏好、共同经历、承诺写入 `relationship_memory.json`。
+  - 重建 `MemoryManager` 后可恢复关系记忆并进入 prompt summary。
+  - 新增 `MemoryManager.close()`，统一关闭 PatternMiner 和 SkillLibrary 资源。
+- 普通聊天后新增保守连续性抽取：
+  - 用户提到偏好、承诺、共同经历时写入长期记忆。
+  - 用户提到“明天/下次/之后继续/提醒/跟进”等内容时写入 open thread 和 proactive cue。
+  - 用户表达疲惫、压力、失眠等状态时设置 `comfort_needed`；工作相关消息设置 `task_focus`。
+- 主动事件 `affect_delta` 现在真实影响 HeartLake：
+  - 事件选中后按 valence/arousal 调整安全感、想念值和主导情绪。
+  - 选中的主动事件写入 continuity 的 `initiative_events`，后续 prompt summary 可看到近期主动素材。
+- Runtime/daemon 生命周期补齐：
+  - `YunxiRuntime.chat()` 在普通对话结束后沉淀关系记忆和连续性线索。
+  - `close_runtime()` 调用 `runtime.memory.close()`。
+
+### 已验证
+
+- `python -m py_compile src\core\initiative\continuity.py src\domains\memory\manager.py src\core\runtime.py src\core\cognition\heart_lake\core.py src\core\cognition\initiative_engine\engine.py src\apps\daemon\main.py tests\unit\test_continuity_persistence.py tests\unit\test_initiative_engine.py tests\domains\memory\test_relationship_memory.py tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\daily_mode_scenario_tester.py` -> passed
+- `python -m pytest -q tests\unit\test_continuity_persistence.py tests\unit\test_initiative_engine.py tests\domains\memory\test_relationship_memory.py tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py` -> 29 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 85 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 30 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot` -> 2 passed（真实 Moonshot，需要联网）
+- `python -m pytest -q tests\integration\test_moonshot_cloud_matrix.py -m real_llm` -> 6 passed（真实 Moonshot，需要联网）
+
+### 下一步
+
+进入阶段 4：日常工具确认和用户可见错误人格化。
+
+优先处理：
+1. 实现统一 pending tool confirmation 协议。
+2. LLM 异常、工具异常、安全 ask、未知工具都转为云汐人格化表达，技术细节只进日志。
+3. 技能快速路径执行结果回到 LLM 做最终自然表达。
+4. LLM provider 增加错误类型、重试和可观测日志。
+5. MCP connect/list_tools/call_tool 增加 timeout 和结构化失败审计。
+
+---
+
 ## [2026-04-16] 阶段 2 完成：Runtime 单入口、飞书通道和常驻稳定性
 
 **状态**：已完成。阶段 2 目标是让真实入口不会因为线程、并发和同步发送阻塞破坏日常模式运行。
@@ -197,14 +244,14 @@
 
 **日期**：2026-04-16  
 **阶段**：Phase 5 日常模式硬化中，尚不应进入 Phase 6 工厂模式。  
-**本次动作**：阶段 2 已完成，下一步进入主动性、长期记忆和连续性沉淀。
+**本次动作**：阶段 3 已完成，下一步进入日常工具确认和用户可见错误人格化。
 
 ### 当前结论
 
 - Phase 0-5 的骨架已经基本搭好：Runtime、PromptBuilder、LLMAdapter、MCPHub、Memory、HeartLake、Initiative、Presence、daemon、飞书通道、Ollama/Moonshot 接入均已有实现。
 - yunxi2.0 的关键资产已经迁入一部分：人格 profile、用户关系 profile、生活事件库、三层主动事件系统、表达上下文、continuity/open_threads。
-- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程。
-- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真和 Moonshot 旧矩阵已经通过；剩余阻塞集中在主动预算、长期关系记忆、连续性自动沉淀和工具确认闭环。
+- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程；阶段 3 已补齐主动预算跨日重置、关系记忆持久化、连续性自动沉淀和主动事件情绪影响。
+- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真和 Moonshot 旧矩阵已经通过；剩余阻塞集中在日常工具确认闭环、用户可见错误人格化、provider 重试和 MCP timeout/结构化失败。
 
 ### 进入工厂模式前的硬门槛
 
@@ -398,6 +445,8 @@
 - 跨天自动重置。
 - 测试覆盖跨日预算、未回复克制、冷却、用户回复后恢复。
 
+当前状态：阶段 3 已修复。`CompanionContinuityService` 新增 `proactive_count_date`，`InitiativeEngine.evaluate()` 前刷新日期；跨日后 `recent_proactive_count` 自动归零并恢复主动预算。
+
 ### P0-06：日常工具的安全确认链路没有闭合
 
 文件：`src/core/mcp/security.py`、`src/core/mcp/hub.py`、`src/core/execution/engine.py`
@@ -435,6 +484,8 @@
 - 增加聊天后异步记忆提取。
 - 增加关系摘要和情绪摘要的周期性 LLM 更新。
 - 测试必须覆盖重启后仍记得用户事实。
+
+当前状态：阶段 3 已完成首版持久化和保守抽取。`MemoryManager` 将偏好、共同经历、承诺落盘到 `relationship_memory.json`，重建后可恢复；普通聊天后会保守抽取偏好/承诺/经历。周期性 LLM 摘要更新仍留作后续增强。
 
 ### P0-08：飞书发送链路在 async 函数里使用同步 requests
 
@@ -527,6 +578,8 @@
 - 事件被选中后将 affect_delta 写入 HeartLake。
 - 将事件记入 continuity，避免主动消息没有生活连续性。
 
+当前状态：阶段 3 已修复。主动事件选中后会调用 `HeartLake.apply_affect_delta()`，并把事件 id/category/seed/affect 写入 continuity 的 `initiative_events`。
+
 ### P1-03：open_threads 和 proactive_cues 缺少自动生成
 
 文件：`src/core/initiative/continuity.py`、`src/core/runtime.py`
@@ -541,6 +594,8 @@
 修复方向：
 - chat 后增加 LLM/规则混合抽取：承诺、未完成话题、用户状态、主动线索。
 - 测试覆盖 open thread 自动生成和主动延续。
+
+当前状态：阶段 3 已完成保守规则版。普通聊天后会抽取未来提醒/继续话题为 open thread 和 proactive cue，并抽取偏好/承诺/经历进入长期关系记忆。
 
 ### P1-04：技能快速路径绕过 LLM，容易退回工具助手
 
@@ -699,6 +754,8 @@
 - `MemoryManager.close()` 统一释放所有资源。
 - Ollama embedding 统一 async 化。
 - daemon close_runtime 必须关闭 memory。
+
+当前状态：阶段 3 已完成主生命周期。`MemoryManager.close()` 已统一关闭 PatternMiner 和 SkillLibrary，daemon close 和 DailyModeScenarioTester teardown 已调用。Ollama embedding 的 sync/async client 结构仍留作后续细化。
 
 ---
 

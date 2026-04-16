@@ -124,6 +124,23 @@ async def test_scenario_tester_injects_reaction_guidance_for_user_input(tmp_path
         await tester.close()
 
 
+@pytest.mark.asyncio
+async def test_chat_turn_captures_relationship_memory_and_open_thread(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock"),
+        scripted_responses=["记住啦，明天我会轻轻提醒你继续看部署方案。"],
+    )
+    try:
+        await tester.chat("我最喜欢冰美式，不加糖；明天提醒我继续看部署方案。")
+
+        assert "冰美式" in tester.runtime.memory.get_memory_summary()
+        assert tester.runtime.continuity.get_open_threads()
+        assert tester.runtime.continuity.proactive_cues
+    finally:
+        await tester.close()
+
+
 def test_behavior_check_rejects_internal_fields_and_toolish_plans(tmp_path):
     check = DailyModeScenarioTester.behavior_check(
         "initiative_event: 第一步执行工具调用，然后输出任务清单。",

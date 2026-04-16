@@ -4,7 +4,9 @@
 并集成 ExperienceBuffer / PatternMiner / SkillDistiller / SkillLibrary / FailureReplay / ParamFiller。
 """
 
+import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from domains.memory.skills.experience_buffer import ExperienceBuffer
@@ -24,9 +26,11 @@ class MemoryManager:
         embedding_provider: Optional[str] = None,
     ) -> None:
         self.base_path = base_path
+        self._relationship_memory_path = Path(base_path) / "relationship_memory.json"
         self._preferences: List[str] = []
         self._episodes: List[str] = []
         self._promises: List[str] = []
+        self._load_relationship_memory()
 
         # 终身学习子系统
         self.experience_buffer = ExperienceBuffer(
@@ -48,26 +52,70 @@ class MemoryManager:
         await self.pattern_miner.initialize()
         await self.skill_library.initialize()
 
+    async def close(self) -> None:
+        """释放记忆子系统持有的外部资源。"""
+        await self.pattern_miner.close()
+        await self.skill_library.close()
+
     def record_preference(self, content: str) -> None:
         """记录用户偏好。"""
-        self._preferences.append(content)
+        self._add_unique(self._preferences, content)
+        self._save_relationship_memory()
 
     def record_episode(self, content: str) -> None:
         """记录事件片段。"""
-        self._episodes.append(content)
+        self._add_unique(self._episodes, content)
+        self._save_relationship_memory()
 
     def record_promise(self, content: str) -> None:
         """记录承诺。"""
-        self._promises.append(content)
+        self._add_unique(self._promises, content)
+        self._save_relationship_memory()
 
     def add_raw_memory(self, category: str, content: str) -> None:
         """按分类写入原始记忆。"""
         if category == "preference":
-            self._preferences.append(content)
+            self._add_unique(self._preferences, content)
         elif category == "episode":
-            self._episodes.append(content)
+            self._add_unique(self._episodes, content)
         elif category == "promise":
-            self._promises.append(content)
+            self._add_unique(self._promises, content)
+        self._save_relationship_memory()
+
+    def capture_relationship_memory(
+        self,
+        user_message: str,
+        assistant_message: str = "",
+    ) -> Dict[str, List[str]]:
+        """保守抽取一轮对话中的长期关系记忆。"""
+        text = user_message.strip()
+        captured: Dict[str, List[str]] = {
+            "preferences": [],
+            "episodes": [],
+            "promises": [],
+        }
+        if not text:
+            return captured
+
+        if any(token in text for token in ("我喜欢", "我最喜欢", "我爱喝", "我爱吃", "我不喜欢", "讨厌", "偏好")):
+            memory = _compact_memory_text(text)
+            self.record_preference(memory)
+            captured["preferences"].append(memory)
+
+        if any(token in text for token in ("我答应", "你答应", "说好了", "别忘", "记得提醒", "记得帮我")):
+            memory = _compact_memory_text(text)
+            self.record_promise(memory)
+            captured["promises"].append(memory)
+
+        episode_tokens = ("刚才", "昨晚", "上次", "最近", "我们一起")
+        today_episode = "今天" in text and "我" in text and "天气" not in text
+        if any(token in text for token in episode_tokens) or today_episode:
+            if not captured["preferences"] and not captured["promises"]:
+                memory = _compact_memory_text(text)
+                self.record_episode(memory)
+                captured["episodes"].append(memory)
+
+        return captured
 
     def get_memory_summary(self, limit: int = 10) -> str:
         """获取记忆摘要文本。"""
@@ -183,3 +231,49 @@ class MemoryManager:
                 skill["version"] = existing[0].get("version", 1) + 1
 
             self.skill_library.add_skill(skill)
+
+    def _load_relationship_memory(self) -> None:
+        if not self._relationship_memory_path.exists():
+            return
+        try:
+            data = json.loads(self._relationship_memory_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        self._preferences = _string_list(data.get("preferences", []))
+        self._episodes = _string_list(data.get("episodes", []))
+        self._promises = _string_list(data.get("promises", []))
+
+    def _save_relationship_memory(self) -> None:
+        self._relationship_memory_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "preferences": self._preferences[-200:],
+            "episodes": self._episodes[-200:],
+            "promises": self._promises[-200:],
+        }
+        self._relationship_memory_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _add_unique(target: List[str], content: str, limit: int = 200) -> None:
+        clean = _compact_memory_text(content)
+        if not clean:
+            return
+        if clean in target:
+            target.remove(clean)
+        target.append(clean)
+        del target[:-limit]
+
+
+def _string_list(value: object) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _compact_memory_text(text: str, limit: int = 160) -> str:
+    return " ".join(text.strip().split())[:limit]

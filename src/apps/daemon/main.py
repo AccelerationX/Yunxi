@@ -208,6 +208,7 @@ async def close_runtime(runtime: YunxiRuntime) -> None:
     provider = getattr(llm, "provider", None)
     if provider is not None:
         await provider.close()
+    await runtime.memory.close()
 
 
 def parse_args() -> argparse.Namespace:

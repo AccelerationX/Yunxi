@@ -77,6 +77,8 @@ class InitiativeEngine:
                 suppression_reason="too_many_unanswered",
             )
 
+        if continuity is not None and hasattr(continuity, "refresh_daily_proactive_count"):
+            continuity.refresh_daily_proactive_count(current_time)
         recent_proactive_count = getattr(continuity, "recent_proactive_count", 0)
         if recent_proactive_count >= self.daily_budget:
             return InitiativeDecision(
