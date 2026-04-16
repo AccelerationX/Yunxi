@@ -132,6 +132,53 @@
 
 ---
 
+## [2026-04-16] Desktop MCP 工具逐项直接对话验证
+
+**状态**：首轮逐项验证通过。飞书链路已被前一轮验证，因此本轮直接模拟“用户发消息”和“用户回复确认”，走 `YunxiExecutionEngine` 的 pending confirmation 逻辑，不再手动通过飞书逐条交互。
+
+### 新增验证
+
+- 新增 `tests/integration/test_daily_mode_desktop_tools_direct.py`：
+  - 使用真实 Desktop MCP server。
+  - 使用脚本化 LLM 触发指定 tool call。
+  - 第一轮 `engine.respond()` 模拟用户提出工具请求。
+  - 第二轮 `engine.respond("确认")` 模拟用户确认。
+  - 检查自然确认话术、工具执行结果和真实副作用。
+- 覆盖工具：
+  - `clipboard_write` + `clipboard_read`：写入并读取 `yunxi direct clipboard matrix`。
+  - `screenshot_capture`：保存真实截图文件并检查文件非空。
+  - `desktop_notify`：发送桌面通知。
+  - `app_launch_ui`：启动 Notepad。
+  - `window_focus_ui`：聚焦 Notepad。
+  - `window_minimize_ui`：最小化 Notepad。
+
+### 期间发现并修复
+
+- `desktop_notify` 原先依赖未安装的 `win10toast`，工具实际返回 `[错误：未安装 win10toast，无法发送通知]`，但 Engine 会继续给自然成功回复，容易掩盖工具失败。
+- 修复 `desktop_notify`：
+  - 保留 `win10toast` 优先路径。
+  - 缺少 `win10toast` 或调用失败时，改用无第三方依赖的 PowerShell `System.Windows.Forms.NotifyIcon` fallback。
+- 测试加强：
+  - 不只检查云汐自然回复，还读取 Engine 上下文中的 `ToolResultContentBlock`。
+  - 拦截 `[错误]`、`失败`、`未找到` 等实际工具失败结果。
+- Notepad 窗口关键词在当前系统中应使用 `Notepad`，不是中文“记事本”。
+
+### 已验证
+
+- `python -m py_compile src\core\mcp\servers\desktop_server.py tests\integration\test_daily_mode_desktop_tools_direct.py` -> passed
+- 普通沙箱运行 direct desktop matrix 因 Windows named pipe 权限失败，外部权限重跑：
+  - `python -m pytest -q tests\integration\test_daily_mode_desktop_tools_direct.py -m desktop_mcp` -> 4 passed
+- 既有 Desktop MCP 回归：
+  - `python -m pytest -q tests\integration\test_mcp_desktop.py -m desktop_mcp` -> 5 passed
+- Engine / MCPHub stage 4 回归：
+  - `python -m pytest -q tests\unit\test_execution_engine_stage4.py tests\unit\test_mcp_hub_stage4.py` -> 6 passed
+
+### 结论
+
+当前 Desktop MCP 工具已经具备一条可重复的直接日常模式验收路径：不依赖飞书手工交互，也不绕过云汐的确认协议。后续新增工具应先加入该矩阵，再做飞书 live 抽样。
+
+---
+
 ## [2026-04-16] 阶段 4 完成：日常工具确认和错误人格化
 
 **状态**：已完成首版。阶段 4 目标是让 daily_mode 下工具请求不再直接变成安全错误，并避免把工程异常暴露给用户。

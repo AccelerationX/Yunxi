@@ -59,9 +59,47 @@ def desktop_notify(title: str, message: str) -> str:
         toaster.show_toast(title, message, duration=5)
         return "通知已发送"
     except ImportError:
-        return "[错误：未安装 win10toast，无法发送通知]"
+        if _send_windows_balloon_notify(title, message):
+            return "通知已发送"
+        return "[错误：未安装 win10toast，且 Windows fallback 通知失败]"
     except Exception as exc:
+        if _send_windows_balloon_notify(title, message):
+            return "通知已发送"
         return f"[发送通知失败：{exc}]"
+
+
+def _send_windows_balloon_notify(title: str, message: str) -> bool:
+    """Send a Windows notification balloon without third-party packages."""
+    import subprocess
+
+    def quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    script = "\n".join(
+        [
+            "Add-Type -AssemblyName System.Windows.Forms",
+            "Add-Type -AssemblyName System.Drawing",
+            "$notify = New-Object System.Windows.Forms.NotifyIcon",
+            "$notify.Icon = [System.Drawing.SystemIcons]::Information",
+            f"$notify.BalloonTipTitle = {quote(title)}",
+            f"$notify.BalloonTipText = {quote(message)}",
+            "$notify.Visible = $true",
+            "$notify.ShowBalloonTip(5000)",
+            "Start-Sleep -Seconds 6",
+            "$notify.Dispose()",
+        ]
+    )
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        return True
+    except OSError:
+        return False
 
 
 # 重试配置
