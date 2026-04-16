@@ -116,6 +116,159 @@ def test_expression_context_for_low_interrupt_is_short():
     assert "Do not mention these field names" in prompt_context
 
 
+def test_engine_triggers_presence_murmur_during_leisure_state():
+    heart = HeartLake()
+    heart.playfulness = 72
+    heart.intimacy_warmth = 74
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="YouTube - Chrome",
+            idle_duration=20,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1.0,
+        perception_snapshot=snapshot,
+    )
+
+    assert decision.trigger is True
+    assert decision.intent == "presence_murmur"
+    assert decision.expression_mode == "presence_murmur"
+    assert decision.should_select_event is False
+    assert "存在感" in decision.reason
+
+
+def test_engine_suppresses_presence_murmur_during_work_state():
+    heart = HeartLake()
+    heart.playfulness = 80
+    heart.intimacy_warmth = 80
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="Visual Studio Code",
+            idle_duration=5,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1.0,
+        perception_snapshot=snapshot,
+    )
+
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
+
+
+def test_engine_suppresses_presence_murmur_during_fullscreen_game_state():
+    heart = HeartLake()
+    heart.playfulness = 80
+    heart.intimacy_warmth = 80
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="Unknown Fullscreen App",
+            foreground_process_name="eldenring.exe",
+            idle_duration=5,
+            is_fullscreen=True,
+            input_events_per_minute=40,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1.0,
+        perception_snapshot=snapshot,
+    )
+
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
+    assert "游戏" in decision.reason
+
+
+def test_engine_suppresses_presence_murmur_during_frequent_input():
+    heart = HeartLake()
+    heart.playfulness = 80
+    heart.intimacy_warmth = 80
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="Unknown App",
+            idle_duration=5,
+            input_events_per_minute=36,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1.0,
+        perception_snapshot=snapshot,
+    )
+
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
+    assert "频繁输入" in decision.reason
+
+
+def test_engine_suppresses_presence_murmur_during_presence_cooldown():
+    heart = HeartLake()
+    heart.playfulness = 80
+    heart.intimacy_warmth = 80
+    continuity = CompanionContinuityService()
+    continuity.record_presence_murmur("tiny wave", 1776268800.0)
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="YouTube - Chrome",
+            idle_duration=20,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[],
+        current_time=1776268830.0,
+        perception_snapshot=snapshot,
+        continuity=continuity,
+    )
+
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
+    assert "presence_murmur_cooldown" in decision.reason
+
+
+def test_expression_context_for_presence_murmur_is_short_and_low_cost():
+    heart = HeartLake()
+    decision = InitiativeDecision(
+        trigger=True,
+        reason="远处于休闲状态",
+        expression_mode="presence_murmur",
+    )
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(focused_application="YouTube - Chrome", idle_duration=20)
+    )
+
+    context = ExpressionContextBuilder().build(
+        decision=decision,
+        heart_lake=heart,
+        perception_snapshot=snapshot,
+    )
+    prompt_context = context.to_prompt_context()
+
+    assert context.max_sentences == 1
+    assert context.interrupt_cost == "low"
+    assert "碎碎念" in prompt_context
+    assert "不要要求远回复" in prompt_context
+    assert "不要复用最近已经说过的碎碎念原句" in prompt_context
+
+
 def test_generation_context_builder_keeps_boundaries_explicit():
     decision = InitiativeDecision(
         trigger=True,

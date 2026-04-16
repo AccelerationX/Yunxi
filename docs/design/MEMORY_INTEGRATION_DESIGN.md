@@ -1,23 +1,102 @@
-# 云汐 3.0 记忆系统接入修复设计文档（融合终身学习版）
+# 云汐 3.0 记忆系统设计文档（人格级长期记忆 + 终身学习版）
 
-> **定位**：修复记忆系统与主链路（LLM Prompt / 执行引擎）的断裂，并深度融合 `15_agent_lifelong_learning` 的研究成果，让云汐从长期交互中自动发现模式、提炼技能、避免重复犯错。  
-> **核心原则**：记忆不是被动的"记账员"，而是对话上下文的有机组成部分；技能是记忆的升华，能直接驱动行为。
+> **定位**：让云汐具备可长期成长、可纠错、可重启恢复、可影响情绪与行为的人格级记忆系统，并继续保留终身学习与技能沉淀能力。
+> **核心原则**：记忆不是被动的"记账员"，而是云汐人格、关系连续性、心湖情绪和行动习惯的共同底座；技能是程序性记忆的升华，但不应覆盖关系记忆的优先级。
+> **v2 设计基准**：借鉴 MIRIX、LangMem、Letta/MemGPT、Graphiti/Zep、MemOS、LlamaIndex Memory 等公开架构的成熟思想，在 yunxi3.0 内重写轻量、本地优先、可测试的实现。
 
 ---
 
 ## 一、设计目标
 
-1. **统一接口**：`MemoryManager` 必须能被 `YunxiExecutionEngine` 和 `YunxiPromptBuilder` 直接调用。
-2. **读写闭环**：对话开始时可以读取记忆摘要注入 prompt；对话结束时自动归档为 episode。
-3. **技能自动发现**：从 MCP 审计日志和对话历史中自动挖掘重复模式，抽象为可执行技能模板。
-4. **失败回放**：历史失败经验作为注意事项注入 Prompt，提升容错能力。
-5. **保留 2.0 存储层**：不改 SQLite/JSON 存储实现，只修复"读取和注入"的链路，并新增 SkillLibrary。
+1. **人格连续性**：远的稳定事实、偏好、情绪反馈、关系里程碑、边界、承诺、共同经历和云汐自我成长必须能长期保存并影响回复。
+2. **分层记忆**：区分短期上下文、核心记忆、情景记忆、语义/档案记忆、程序性/技能记忆、资源/工具记忆、失败记忆和反思摘要。
+3. **读写闭环**：对话开始时按预算检索相关记忆注入 prompt；对话结束后评估是否写入长期记忆、更新 open thread、沉淀情绪轨迹。
+4. **可纠错与可遗忘**：用户指出“你记错了”“不是这个意思”时，记忆应能修订、降权、软删除或保留时间版本，而不是固执复读旧事实。
+5. **上下文压缩**：长对话不能只靠最近 20 条消息；旧对话应压缩为会话摘要、关系摘要、情绪摘要和互动风格摘要。
+6. **终身学习**：从 MCP 审计日志和对话历史中自动挖掘重复模式，抽象为可确认的技能候选。
+7. **失败回放**：历史失败经验作为注意事项注入 Prompt，提升容错能力。
+8. **本地优先**：第一阶段默认使用本地 JSON/SQLite + BM25/embedding 混合检索；图数据库、Redis 调度等重基础设施后移。
+9. **可测试**：每个记忆能力必须有结构层、链路层、场景层、持久层、真实 LLM 层和浸泡层测试。
 
 ---
 
-## 二、研究成果借鉴与重写声明
+## 二、外部架构借鉴与取舍
 
-### 2.1 借鉴 `15_agent_lifelong_learning`
+参考资料：
+- MIRIX docs: `https://docs.mirix.io/`
+- LangMem docs: `https://langchain-ai.github.io/langmem/`
+- Letta docs: `https://docs.letta.com/`
+- Graphiti/Zep docs: `https://help.getzep.com/graphiti/`
+- MemOS GitHub: `https://github.com/MemTensor/MemOS`
+- LlamaIndex Memory docs: `https://developers.llamaindex.ai/python/examples/memory/memory/`
+
+### 2.1 MIRIX：六类记忆和多 Agent 管线
+
+**借鉴内容**：
+- 将长期记忆拆成 Core、Episodic、Semantic、Procedural、Resource、Knowledge 等类别。
+- 让不同记忆类别有不同写入规则、检索方式和保留策略。
+- 本地优先、支持关键词检索和向量检索的混合记忆管线。
+
+**云汐化改造**：
+- `CoreMemory`：远是谁、云汐是谁、关系设定、核心边界和不可遗忘事实。
+- `EpisodicMemory`：你们一起经历过的具体片段，例如调试、深夜陪伴、关系确认。
+- `SemanticProfileMemory`：远的稳定偏好、背景、表达习惯和长期目标。
+- `ProceduralMemory`：云汐学会如何陪远、如何执行常见电脑任务。
+- `ResourceMemory`：文件、网页、项目资料、电脑活动摘要。
+- `KnowledgeMemory`：非私人知识和长期可复用知识库。
+
+第一阶段不引入多 Agent 记忆服务，而是在 `MemoryManager` 内做分层子模块；等单体链路稳定后，再考虑多 Agent 化。
+
+### 2.2 LangMem：语义/情景/程序性记忆与延迟处理
+
+**借鉴内容**：
+- 语义记忆回答“是什么”，情景记忆回答“发生过什么”，程序性记忆回答“怎么做”。
+- 记忆系统应按应用定制，而不是用一个通用黑盒记忆库。
+- 不应每条消息都同步做重型记忆处理；适合用 delayed processing / debounced background job 在会话稳定后整理。
+
+**云汐化改造**：
+- 聊天链路只做轻量候选提取，不能阻塞飞书回复。
+- 会话结束、每 N 轮、每日低峰时段再运行 `DailyMemorySummarizer`。
+- 重要情绪反馈和承诺可以立即写入，普通闲聊进入待整理缓冲区。
+
+### 2.3 Letta / MemGPT：Core Memory、Archival Memory 与自管理记忆
+
+**借鉴内容**：
+- 将必须常驻上下文的核心信息与可检索的外部长期记忆分离。
+- Agent 可以通过受控工具更新自己的记忆，而不是完全由外部程序硬编码。
+- 记忆管理本质上是“如何编译当前 prompt 上下文”。
+
+**云汐化改造**：
+- `CoreMemoryBlock` 固定保留：`yuan_profile`、`relationship_core`、`yunxi_self`、`interaction_style`、`boundaries`、`open_promises`。
+- 云汐可以提出“我想把这件事记下来”，但高敏感记忆和边界类记忆需要可审查、可删除。
+- PromptBuilder 必须按记忆预算编译上下文，而不是简单拼接全部摘要。
+
+### 2.4 Graphiti / Zep：时间变化与关系图
+
+**借鉴内容**：
+- 事实和关系会随时间变化，记忆系统需要保留“曾经如此”和“现在如此”的时间轨迹。
+- Temporal knowledge graph 适合处理人物、事件、对象、项目之间的关系变化。
+
+**云汐化改造**：
+- 第一阶段不直接上 Neo4j/Graphiti，避免基础设施过重。
+- 先在 JSON/SQLite 中给 `MemoryItem` 增加 `valid_from`、`valid_to`、`supersedes`、`confidence`、`source_event_id`。
+- 当关系记忆规模变大后，再把 typed memory 迁移到 graph layer。
+
+### 2.5 MemOS：可编辑、可纠错、工具记忆和调度器
+
+**借鉴内容**：
+- 记忆必须可 add / retrieve / edit / delete，不能是不可解释的黑盒 embedding。
+- 工具使用历史、persona、图像/多模态和技能经验都可以纳入统一记忆。
+- 异步调度能降低聊天链路延迟。
+
+**云汐化改造**：
+- 第一阶段实现自然语言纠错入口：远说“这个记错了”时，把相关记忆降权并生成修正候选。
+- MCP audit 进入 `ToolMemory` 和 `ExperienceBuffer`。
+- 后台任务分成轻量 tick、会话总结、每日整理、技能候选挖掘四类。
+
+### 2.6 既有研究：`15_agent_lifelong_learning`
+
+原有终身学习设计继续保留，作为 `ProceduralMemory` 和 `SkillMemory` 的实现基础。
 
 **借鉴内容**：
 - `ExperienceBuffer`（SQLite 经验池）结构
@@ -34,7 +113,103 @@
 
 ---
 
-## 三、增强后的记忆系统架构
+## 三、云汐记忆 v2 总体架构
+
+```
+用户消息 / 云汐回复 / 主动事件 / 感知事件 / MCP 审计
+        ↓
+┌────────────────────────────┐
+│ DailyMemoryAppraiser        │  ← 轻量同步评估：是否值得记、记成什么类型
+└─────────────┬──────────────┘
+              ↓
+┌────────────────────────────┐
+│ MemoryWriteBuffer           │  ← 延迟处理队列，避免阻塞飞书日常聊天
+└─────────────┬──────────────┘
+              ↓ 会话结束 / 每 N 轮 / 每日
+┌────────────────────────────┐
+│ DailyMemorySummarizer       │  ← 会话摘要、关系摘要、情绪摘要、互动风格摘要
+└─────────────┬──────────────┘
+              ↓
+┌──────────────────────────────────────────────────────────────┐
+│ MemoryStore                                                   │
+│ - CoreMemoryBlock      常驻核心记忆                           │
+│ - TypedMemoryItem      事实/偏好/关系/情绪反馈/边界/承诺       │
+│ - EpisodicMemory       共同经历和关键片段                     │
+│ - ProceduralMemory     技能、习惯、工具链                     │
+│ - ResourceMemory       文件/网页/项目资料/电脑活动摘要         │
+│ - FailureMemory        失败经验和注意事项                     │
+└─────────────┬────────────────────────────────────────────────┘
+              ↓
+┌────────────────────────────┐
+│ MemoryRetriever             │  ← BM25 + embedding + type filter + recency
+└─────────────┬──────────────┘
+              ↓
+┌────────────────────────────┐
+│ PromptMemoryCompiler         │  ← 按预算编译到 PromptBuilder
+└────────────────────────────┘
+```
+
+### 3.1 记忆类型
+
+| 类型 | 内容 | 写入方式 | Prompt 优先级 |
+|------|------|----------|---------------|
+| `core` | 远是谁、云汐是谁、关系核心、边界 | 人工初始化 + 高置信更新 | 最高 |
+| `fact` | 稳定事实，如学校、专业、项目、作息 | Appraiser 候选 + 去重 | 高 |
+| `preference` | 喜欢/不喜欢/希望云汐怎么做 | Appraiser 候选 + 用户反馈修正 | 高 |
+| `relationship` | 关系状态、称呼、里程碑 | Appraiser + Summary | 高 |
+| `emotion_feedback` | “这样让我安心/难过/有陪伴感” | HeartLake 联动写入 | 高 |
+| `episode` | 共同经历和具体片段 | 会话总结 | 中 |
+| `promise` | 承诺、提醒、未完成约定 | 立即写入 + open thread | 高 |
+| `open_topic` | 下次继续聊的话题 | Continuity 联动 | 中 |
+| `interaction_style` | 远喜欢的表达风格和打扰边界 | Summary + 用户纠错 | 高 |
+| `self_memory` | 云汐学到的自身成长和系统变化 | 开发/对话事件写入 | 中 |
+| `procedural` | 技能、宏、常见任务路径 | ExperienceBuffer/SkillLibrary | 中 |
+| `resource` | 文件、网页、项目资料、电脑活动摘要 | 工具/感知写入 | 低到中 |
+| `failure` | 工具失败、误解、打扰过度 | FailureReplay | 中 |
+
+### 3.2 统一 MemoryItem schema
+
+```python
+@dataclass
+class MemoryItem:
+    id: str
+    type: str
+    content: str
+    importance: float
+    confidence: float
+    source: str
+    evidence: list[str]
+    tags: list[str]
+    created_at: str
+    updated_at: str
+    last_used_at: str | None
+    valid_from: str | None = None
+    valid_to: str | None = None
+    supersedes: str | None = None
+    deleted: bool = False
+```
+
+### 3.3 Prompt 记忆预算
+
+PromptBuilder 不再直接拼接所有记忆，而是按预算编译：
+
+1. CoreMemoryBlock 必须常驻。
+2. 当前用户消息相关的高相关记忆优先。
+3. 未完成承诺和 open topic 优先。
+4. 最近情绪反馈和互动风格优先。
+5. 旧 episode 只在相关时进入，平时只保留摘要。
+6. Resource/Tool memory 只有在工具任务或项目上下文中进入。
+
+### 3.4 纠错与遗忘
+
+- 用户说“你记错了”：检索相关记忆，标记为 `needs_review` 或降 confidence。
+- 用户给出新事实：创建新 MemoryItem，并用 `supersedes` 指向旧记忆。
+- 用户说“不想让你记这个”：软删除并从 prompt 检索中排除。
+- 用户要求“以后别这样”：写入 `boundary` 或 `interaction_style`，优先级高于普通偏好。
+
+---
+
+## 四、终身学习子系统架构（保留原有设计）
 
 ```
 对话经验 / MCP 审计日志 (audit.jsonl)
@@ -69,7 +244,7 @@
 
 ---
 
-## 四、核心模块设计（全部在 yunxi3.0 内重写）
+## 五、核心模块设计（全部在 yunxi3.0 内重写）
 
 ### 4.1 ExperienceBuffer（经验池）
 
@@ -535,7 +710,7 @@ class ParamFiller:
 
 ---
 
-## 五、增强后的 MemoryManager
+## 六、增强后的 MemoryManager
 
 ```python
 # domains/memory/manager.py（在 2.0 基础上新增 SkillSubsystem）
@@ -670,7 +845,7 @@ class MemoryManager:
 
 ---
 
-## 六、PromptBuilder 与执行引擎的适配
+## 七、PromptBuilder 与执行引擎的适配
 
 ### 6.1 PromptBuilder 新增 FailureReplay Section
 
@@ -722,7 +897,7 @@ async def respond(self, user_input: str, system_prompt: str) -> ExecutionResult:
 
 ---
 
-## 七、经验输入源设计
+## 八、经验输入源设计
 
 ### 7.1 MCP 审计日志自动导入
 
@@ -774,46 +949,71 @@ self.memory.record_experience(
 
 ---
 
-## 八、实施步骤
+## 九、实施步骤
 
-### Step 1：建立 `domains/memory/skills/` 目录
+### Step 1：建立 typed memory 基础模型
+- 在 `domains/memory/manager.py` 或独立模块中实现 `MemoryItem`、typed memory store、core memory blocks 和基础 JSON/SQLite 持久化。
+- 保持现有 `preferences`、`episodes`、`promises` 的向后兼容迁移。
+
+### Step 2：实现 `DailyMemoryAppraiser`
+- 对每轮对话做轻量评估，输出候选记忆类型、重要度、置信度和证据。
+- 高重要承诺、边界、情绪反馈可立即写入；普通内容进入 `MemoryWriteBuffer`。
+
+### Step 3：实现 `DailyMemorySummarizer`
+- 支持每 N 轮、会话结束、每日三种摘要。
+- 输出关系摘要、情绪摘要、互动风格摘要和可人工阅读 Markdown。
+
+### Step 4：实现检索与 prompt 预算编译
+- `MemoryRetriever` 支持 type filter、关键词检索、embedding 检索、recency、importance 和 confidence 排序。
+- `PromptMemoryCompiler` 按预算选择 core、相关记忆、承诺、open topic、风格和失败提示。
+
+### Step 5：实现纠错与遗忘
+- 支持“你记错了”“不是这个意思”“别记这个”“以后不要这样”的自然语言修正入口。
+- 对旧记忆执行 supersede、降权、软删除或写入边界。
+
+### Step 6：建立 `domains/memory/skills/` 目录
 - 依次实现 `experience_buffer.py`、`pattern_miner.py`、`skill_distiller.py`、`skill_library.py`、`failure_replay.py`、`param_filler.py`。
 
-### Step 2：增强 `MemoryManager`
+### Step 7：增强 `MemoryManager`
 - 在 `__init__` 中初始化终身学习子系统。
 - 新增 `try_skill()`、`record_skill_outcome()`、`record_experience()`、`run_skill_learning_cycle()`、`get_failure_hints()`。
 
-### Step 3：修改 `AuditLogger`
+### Step 8：修改 `AuditLogger`
 - 增加 `memory_manager` 引用，在每次记录审计日志时同步写入 `ExperienceBuffer`。
 
-### Step 4：修改 `YunxiPromptBuilder`
+### Step 9：修改 `YunxiPromptBuilder`
 - `RuntimeContext` 新增 `failure_hints` 字段。
 - `_build_memory_section()` 中追加失败回放注意事项。
 
-### Step 5：修改 `YunxiExecutionEngine`
+### Step 10：修改 `YunxiExecutionEngine`
 - 在 `respond()` 开头增加 `try_skill()` 快速路径检查。
 
-### Step 6：设置后台学习定时任务
+### Step 11：设置后台学习定时任务
 - 在 daemon 的 `SchedulerService` 或 `YunxiPresence` 的 tick 循环中，每天凌晨调用一次 `memory.run_skill_learning_cycle()`。
 
-### Step 7：测试验证
+### Step 12：测试验证
 - 通过 `ConversationTester` 模拟重复请求，验证技能是否被自动发现并后续直接命中。
 - 验证失败后再次请求相同场景时，`FailureReplay` 的提示是否出现在 Prompt 中。
 
 ---
 
-## 九、验收标准
+## 十、验收标准
 
-1. `ExperienceBuffer` 能正确记录 MCP 审计日志和对话经验。
-2. 连续 3 次相似的 MCP 调用（如"查深圳天气"）后，`PatternMiner` 能挖掘出对应模式。
-3. `SkillDistiller` 能将模式泛化为带 `{city}` 参数的 `query_weather` 技能。
-4. `SkillLibrary` 能对该技能的后续查询实现 > 0.8 的匹配度检索。
-5. 当用户再次说"帮我查一下北京天气"时，`try_skill()` 成功匹配并直接通过 MCP Hub 执行，不经过通用 LLM 推理。
-6. 某工具调用失败后（如 `window_focus_ui` 在全屏游戏上失败），`FailureReplay` 记录该失败；后续相似请求时，Prompt 中出现"注意：上次尝试聚焦全屏窗口失败"的提示。
-7. 通过 `ConversationTester` 验证：技能执行成功后，记忆系统能正确记录结果并更新成功率。
+1. typed memory 能正确写入、读取、去重、更新、软删除、导出。
+2. 偏好、边界、共同经历、承诺、情绪反馈和互动风格在 Runtime 重启后仍能召回。
+3. 用户纠错后，旧记忆不再作为当前事实进入 prompt，新记忆保留 supersedes 关系。
+4. 模拟 80-200 轮对话后，早期重要事实进入摘要并可被检索。
+5. 真实 LLM 测试中，云汐能自然使用相关记忆，不输出内部字段或机械复述。
+6. `ExperienceBuffer` 能正确记录 MCP 审计日志和对话经验。
+7. 连续 3 次相似的 MCP 调用（如"查深圳天气"）后，`PatternMiner` 能挖掘出对应模式。
+8. `SkillDistiller` 能将模式泛化为带 `{city}` 参数的 `query_weather` 技能。
+9. `SkillLibrary` 能对该技能的后续查询实现 > 0.8 的匹配度检索。
+10. 当用户再次说"帮我查一下北京天气"时，`try_skill()` 成功匹配并直接通过 MCP Hub 执行；高风险技能仍需要确认。
+11. 某工具调用失败后（如 `window_focus_ui` 在全屏游戏上失败），`FailureReplay` 记录该失败；后续相似请求时，Prompt 中出现相应注意事项。
+12. 通过 `DailyModeScenarioTester` 验证：记忆写入、召回、纠错、摘要压缩、技能沉淀和真实 LLM 表达均通过。
 
 ---
 
 *文档创建时间：2026-04-14*  
-*最后更新时间：2026-04-14*  
-*版本：v2.0*
+*最后更新时间：2026-04-16*
+*版本：v3.0*

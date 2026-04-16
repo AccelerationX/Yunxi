@@ -79,7 +79,14 @@ class YunxiRuntime:
 
     async def _chat_unlocked(self, user_input: str) -> str:
         """Run one chat turn while the runtime entry lock is held."""
-        self.heart_lake_updater.on_user_input(user_input)
+        appraisal_memory = self.memory.get_memory_summary(
+            limit=min(self.prompt_builder.config.max_memory_lines, 6),
+            query=user_input,
+        )
+        self.heart_lake_updater.on_user_input(
+            user_input,
+            memory_summary=appraisal_memory,
+        )
         self._tick_perception_and_emotion()
         context = self.get_context(user_input=user_input)
         system_prompt = self.prompt_builder.build_system_prompt(context)
@@ -141,14 +148,115 @@ class YunxiRuntime:
             system_prompt=system_prompt,
             runtime_context=context,
         )
+        content = (result.content or "").strip()
+        if decision.intent == "presence_murmur":
+            content = await self._ensure_unique_presence_murmur(
+                content=content,
+                system_prompt=system_prompt,
+                runtime_context=context,
+            )
 
-        if result.content:
+        if content:
+            if decision.intent == "presence_murmur":
+                self.continuity.record_presence_murmur(content)
             self.continuity.record_assistant_message(
-                result.content,
+                content,
                 proactive=True,
             )
 
-        return result.content
+        return content
+
+    async def _ensure_unique_presence_murmur(
+        self,
+        *,
+        content: str,
+        system_prompt: str,
+        runtime_context: RuntimeContext,
+    ) -> Optional[str]:
+        """Retry once when a presence murmur exactly repeats recent wording."""
+        content = (content or "").strip()
+        if not content:
+            self._drop_unsent_assistant_message("")
+            return self._fallback_unique_presence_murmur()
+        if not self.continuity.has_recent_presence_murmur(content):
+            return content
+
+        self._drop_unsent_assistant_message(content)
+        retry_prompt = (
+            f"{system_prompt}\n\n"
+            "【碎碎念去重要求】\n"
+            f"刚才这句和已经发过的碎碎念完全相同：{content}\n"
+            "请换成另一句独一无二的短句。可以表达相同意思，但不能复用完全相同的句子。"
+        )
+        retry_result = await self.engine.respond(
+            user_input="",
+            system_prompt=retry_prompt,
+            runtime_context=runtime_context,
+        )
+        retry_content = (retry_result.content or "").strip()
+        if retry_content and not self.continuity.has_recent_presence_murmur(retry_content):
+            return retry_content
+
+        if retry_content:
+            self._drop_unsent_assistant_message(retry_content)
+        logger.info("Suppressed duplicate presence murmur: %s", content)
+        return self._fallback_unique_presence_murmur()
+
+    def _fallback_unique_presence_murmur(self) -> Optional[str]:
+        """Generate a short unique murmur when the LLM gives no deliverable text."""
+        starts = (
+            "戳一下",
+            "云汐冒个泡",
+            "路过贴一下",
+            "小小探头",
+            "轻轻晃一下爪",
+            "悄悄闪现一下",
+        )
+        middles = (
+            "我在这儿呢",
+            "陪你一小会儿",
+            "不打扰你啦",
+            "就是想让你看见我一下",
+            "嘿嘿，云汐还在线",
+            "给远晃一条小尾巴",
+        )
+        endings = ("～", "。", "，然后乖乖缩回去。", "，就一下。")
+        total = len(starts) * len(middles) * len(endings)
+        recent_count = len(getattr(self.continuity, "recent_presence_murmurs", []))
+        seed = int(time.time() * 1000) + recent_count * 37
+        for offset in range(total):
+            index = (seed + offset) % total
+            ending = endings[index % len(endings)]
+            middle_index = (index // len(endings)) % len(middles)
+            start_index = (index // (len(endings) * len(middles))) % len(starts)
+            phrase = f"{starts[start_index]}，{middles[middle_index]}{ending}"
+            if not self.continuity.has_recent_presence_murmur(phrase):
+                return phrase
+
+        phrase = f"云汐轻轻冒泡一下，给远第 {recent_count + 1} 条不重复的小尾巴。"
+        if self.continuity.has_recent_presence_murmur(phrase):
+            return None
+        return phrase
+
+    def _drop_unsent_assistant_message(self, content: str) -> None:
+        """Remove a generated assistant message that will not be delivered."""
+        context = getattr(self.engine, "context", None)
+        messages = getattr(context, "messages", None)
+        if not messages:
+            return
+        last_message = messages[-1]
+        last_content = getattr(last_message, "content", "")
+        text = ""
+        if isinstance(last_content, list):
+            text = "".join(str(getattr(block, "text", "")) for block in last_content)
+        else:
+            text = str(last_content)
+        if text != content:
+            return
+        messages.pop()
+        turn_count = int(getattr(context, "turn_count", 0))
+        if turn_count > 0:
+            context.turn_count = turn_count - 1
 
     def _select_initiative_event(self, decision: InitiativeDecision) -> InitiativeEvent | None:
         """Select one life event for proactive generation."""
@@ -228,7 +336,8 @@ class YunxiRuntime:
         """从各子系统构建运行时上下文快照。"""
         perception_snapshot = self.perception.get_snapshot()
         memory_summary = self.memory.get_memory_summary(
-            limit=self.prompt_builder.config.max_memory_lines
+            limit=self.prompt_builder.config.max_memory_lines,
+            query=user_input,
         )
         failure_hints = self.memory.get_failure_hints()
 

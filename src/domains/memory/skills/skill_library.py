@@ -99,11 +99,18 @@ class SkillLibrary:
                     embedding BLOB,
                     success_count INTEGER DEFAULT 0,
                     fail_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'approved',
+                    candidate_reason TEXT DEFAULT '',
                     created_at TEXT,
                     updated_at TEXT
                 )
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(skills)").fetchall()}
+            if "status" not in columns:
+                conn.execute("ALTER TABLE skills ADD COLUMN status TEXT DEFAULT 'approved'")
+            if "candidate_reason" not in columns:
+                conn.execute("ALTER TABLE skills ADD COLUMN candidate_reason TEXT DEFAULT ''")
 
     async def initialize(self) -> None:
         """异步初始化 embedding 模型。"""
@@ -129,7 +136,7 @@ class SkillLibrary:
             )
             self.model = None
 
-    def add_skill(self, skill: Dict[str, Any]) -> None:
+    def add_skill(self, skill: Dict[str, Any], status: str = "approved") -> None:
         """添加或更新技能。"""
         if self.model is None and self.ollama_embedder is None:
             avg_embedding = b""
@@ -144,10 +151,12 @@ class SkillLibrary:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO skills
-                   (skill_name, trigger_patterns, parameters, actions, embedding, success_count, fail_count, created_at, updated_at)
+                   (skill_name, trigger_patterns, parameters, actions, embedding, success_count, fail_count, status, candidate_reason, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?,
                            COALESCE((SELECT success_count FROM skills WHERE skill_name = ?), 0),
                            COALESCE((SELECT fail_count FROM skills WHERE skill_name = ?), 0),
+                           ?,
+                           ?,
                            COALESCE((SELECT created_at FROM skills WHERE skill_name = ?), ?),
                            ?)""",
                 (
@@ -158,11 +167,54 @@ class SkillLibrary:
                     avg_embedding,
                     skill["skill_name"],
                     skill["skill_name"],
+                    status,
+                    str(skill.get("candidate_reason", "")),
                     skill["skill_name"],
                     now,
                     now,
                 ),
             )
+
+    def add_candidate(self, skill: Dict[str, Any], reason: str = "") -> None:
+        """Store a mined skill as a pending candidate instead of enabling it."""
+        candidate = dict(skill)
+        candidate["candidate_reason"] = reason
+        self.add_skill(candidate, status="pending")
+
+    def list_skills(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List stored skills or candidates."""
+        with sqlite3.connect(self.db_path) as conn:
+            columns = self._select_columns()
+            if status is None:
+                rows = conn.execute(
+                    f"SELECT {columns} FROM skills ORDER BY updated_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT {columns} FROM skills WHERE status = ? ORDER BY updated_at DESC",
+                    (status,),
+                ).fetchall()
+        return [self._row_to_skill(row, score=0.0) for row in rows]
+
+    def approve_candidate(self, skill_name: str) -> bool:
+        """Approve a pending skill candidate so it can be used by try_skill."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE skills SET status = 'approved', updated_at = ? "
+                "WHERE skill_name = ? AND status = 'pending'",
+                (datetime.now().isoformat(), skill_name),
+            )
+            return cursor.rowcount > 0
+
+    def reject_candidate(self, skill_name: str) -> bool:
+        """Reject a pending skill candidate without deleting historical context."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "UPDATE skills SET status = 'rejected', updated_at = ? "
+                "WHERE skill_name = ? AND status = 'pending'",
+                (datetime.now().isoformat(), skill_name),
+            )
+            return cursor.rowcount > 0
 
     async def retrieve(
         self, query: str, top_k: int = 3, threshold: float = 0.75
@@ -177,7 +229,9 @@ class SkillLibrary:
             query_vec = np.array(embeddings[0], dtype=np.float32)
 
         with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute("SELECT * FROM skills").fetchall()
+            rows = conn.execute(
+                f"SELECT {self._select_columns()} FROM skills WHERE status = 'approved'"
+            ).fetchall()
 
         scored = []
         for row in rows:
@@ -205,16 +259,33 @@ class SkillLibrary:
         scored.sort(key=lambda x: x[0], reverse=True)
 
         return [
-            {
-                "skill_name": row[1],
-                "trigger_patterns": json.loads(row[2]),
-                "parameters": json.loads(row[3]),
-                "actions": json.loads(row[4]),
-                "score": score,
-                "success_rate": row[6] / (row[6] + row[7] + 1e-6),
-            }
+            self._row_to_skill(row, score=score)
             for score, row in scored[:top_k]
         ]
+
+    def _row_to_skill(self, row: tuple, score: float = 0.0) -> Dict[str, Any]:
+        status = row[8] if len(row) > 8 else "approved"
+        candidate_reason = row[9] if len(row) > 9 else ""
+        return {
+            "skill_name": row[1],
+            "trigger_patterns": json.loads(row[2]),
+            "parameters": json.loads(row[3]),
+            "actions": json.loads(row[4]),
+            "score": score,
+            "success_rate": row[6] / (row[6] + row[7] + 1e-6),
+            "success_count": row[6],
+            "fail_count": row[7],
+            "status": status,
+            "candidate_reason": candidate_reason,
+            "created_at": row[10] if len(row) > 10 else "",
+            "updated_at": row[11] if len(row) > 11 else "",
+        }
+
+    def _select_columns(self) -> str:
+        return (
+            "id, skill_name, trigger_patterns, parameters, actions, embedding, "
+            "success_count, fail_count, status, candidate_reason, created_at, updated_at"
+        )
 
     def _lexical_similarity(
         self,

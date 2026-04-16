@@ -372,8 +372,12 @@ class DailyModeScenarioTester:
         readable_time: str = "2026-04-16 20:00:00",
         hour: int = 20,
         focused_application: str = "",
+        foreground_process_name: str = "",
+        foreground_window_class: str = "",
         idle_duration: float = 0.0,
         is_at_keyboard: bool = True,
+        is_fullscreen: bool = False,
+        input_events_per_minute: float = 0.0,
         cpu_percent: float = 0.0,
     ) -> None:
         """Set time and presence perception for the next runtime update."""
@@ -381,8 +385,12 @@ class DailyModeScenarioTester:
             time_context=TimeContext(readable_time=readable_time, hour=hour),
             user_presence=UserPresence(
                 focused_application=focused_application,
+                foreground_process_name=foreground_process_name,
+                foreground_window_class=foreground_window_class,
                 idle_duration=idle_duration,
                 is_at_keyboard=is_at_keyboard,
+                is_fullscreen=is_fullscreen,
+                input_events_per_minute=input_events_per_minute,
             ),
             system_state=SystemState(cpu_percent=cpu_percent),
         )

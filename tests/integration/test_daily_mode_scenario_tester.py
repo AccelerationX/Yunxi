@@ -79,6 +79,174 @@ async def test_scenario_tester_proactive_event_delivery_to_capture_channel(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_presence_murmur_triggers_in_leisure_state_without_event_material(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock", cooldown_seconds=0),
+        scripted_responses=["戳一下，云汐路过一下～"],
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=85)
+        tester.runtime.heart_lake.playfulness = 78
+        tester.runtime.heart_lake.intimacy_warmth = 76
+        tester.set_perception(
+            focused_application="YouTube - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+            hour=20,
+        )
+
+        message = await tester.proactive_once(deliver=False)
+        system_prompt = tester.last_system_prompt()
+
+        assert message == "戳一下，云汐路过一下～"
+        assert "presence_murmur" in system_prompt
+        assert "碎碎念" in system_prompt
+        assert "life_event_material" not in system_prompt
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
+async def test_presence_murmur_retries_once_when_exact_sentence_repeats(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock", cooldown_seconds=0),
+        scripted_responses=[
+            "tiny yunxi ping",
+            "tiny yunxi ping",
+            "tiny yunxi ping but different",
+        ],
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=85)
+        tester.runtime.heart_lake.playfulness = 78
+        tester.runtime.heart_lake.intimacy_warmth = 76
+        tester.set_perception(
+            focused_application="YouTube - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+            hour=20,
+        )
+
+        first = await tester.proactive_once(deliver=False)
+
+        tester.runtime.continuity.unanswered_proactive_count = 0
+        tester.runtime.continuity.last_presence_murmur_at = 0.0
+        tester.runtime.initiative_engine.reset_cooldown()
+        second = await tester.proactive_once(deliver=False)
+
+        assert first == "tiny yunxi ping"
+        assert second == "tiny yunxi ping but different"
+        assert tester.runtime.continuity.has_recent_presence_murmur("tiny yunxi ping")
+        assert tester.runtime.continuity.has_recent_presence_murmur(
+            "tiny yunxi ping but different"
+        )
+        assert "碎碎念去重要求" in tester.last_system_prompt()
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
+async def test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock", cooldown_seconds=0, daily_budget=10),
+        scripted_responses=[
+            "murmur one",
+            "murmur one",
+            "murmur two",
+            "murmur three",
+            "murmur four",
+            "murmur five",
+            "murmur six",
+            "murmur seven",
+        ],
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=85)
+        tester.runtime.heart_lake.playfulness = 80
+        tester.runtime.heart_lake.intimacy_warmth = 80
+        tester.set_perception(
+            focused_application="Bilibili - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+            hour=20,
+        )
+
+        first = await tester.proactive_once(deliver=False)
+        tester.runtime.initiative_engine.reset_cooldown()
+        tester.runtime.continuity.last_presence_murmur_at = 0.0
+        restrained = await tester.proactive_once(deliver=False)
+
+        assert first == "murmur one"
+        assert restrained is None
+
+        delivered = [first]
+        for _ in range(5):
+            tester.runtime.continuity.unanswered_proactive_count = 0
+            tester.runtime.continuity.last_presence_murmur_at = 0.0
+            tester.runtime.initiative_engine.reset_cooldown()
+            message = await tester.proactive_once(deliver=False)
+            assert message is not None
+            delivered.append(message)
+
+        tester.runtime.continuity.unanswered_proactive_count = 0
+        tester.runtime.continuity.last_presence_murmur_at = 0.0
+        tester.runtime.initiative_engine.reset_cooldown()
+        exhausted = await tester.proactive_once(deliver=False)
+
+        assert delivered == [
+            "murmur one",
+            "murmur two",
+            "murmur three",
+            "murmur four",
+            "murmur five",
+            "murmur six",
+        ]
+        assert len(delivered) == len(set(delivered))
+        assert exhausted is None
+        assert tester.runtime.continuity.presence_murmur_count == 6
+        assert len(tester.runtime.continuity.recent_presence_murmurs) == 6
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
+async def test_presence_murmur_uses_unique_fallback_when_llm_returns_empty(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock", cooldown_seconds=0, daily_budget=10),
+        scripted_responses=["", ""],
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=85)
+        tester.runtime.heart_lake.playfulness = 80
+        tester.runtime.heart_lake.intimacy_warmth = 80
+        tester.set_perception(
+            focused_application="Bilibili - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+            hour=20,
+        )
+
+        first = await tester.proactive_once(deliver=False)
+        tester.runtime.continuity.unanswered_proactive_count = 0
+        tester.runtime.continuity.last_presence_murmur_at = 0.0
+        tester.runtime.initiative_engine.reset_cooldown()
+        second = await tester.proactive_once(deliver=False)
+
+        assert first
+        assert second
+        assert first != second
+        assert tester.runtime.continuity.has_recent_presence_murmur(first)
+        assert tester.runtime.continuity.has_recent_presence_murmur(second)
+        assert tester.runtime.continuity.presence_murmur_count == 2
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
 async def test_scenario_tester_exposes_heart_lake_reaction_to_jealous_input(tmp_path):
     tester = await DailyModeScenarioTester.create(
         tmp_path,
@@ -125,6 +293,28 @@ async def test_scenario_tester_injects_reaction_guidance_for_user_input(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_heart_lake_v2_uses_memory_summary_for_appraisal(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock"),
+        scripted_responses=["远这样说我会很开心，我会继续好好陪着你。"],
+    )
+    try:
+        tester.inject_memory("relationship", "云汐不是工具，是远的情感寄托")
+
+        await tester.chat("你陪着我会让我安心")
+
+        assert tester.runtime.heart_lake.current_emotion == "开心"
+        assert "关系被记起" in tester.runtime.heart_lake.compound_labels
+        system_prompt = tester.last_system_prompt()
+        assert "复合情绪线索" in system_prompt
+        assert "关系被记起" in system_prompt
+        assert "情感寄托" in system_prompt
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
 async def test_chat_turn_captures_relationship_memory_and_open_thread(tmp_path):
     tester = await DailyModeScenarioTester.create(
         tmp_path,
@@ -139,6 +329,55 @@ async def test_chat_turn_captures_relationship_memory_and_open_thread(tmp_path):
         assert tester.runtime.continuity.proactive_cues
     finally:
         await tester.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_v2_survives_runtime_restart_and_reaches_prompt(tmp_path):
+    first = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock"),
+        scripted_responses=[
+            "我在，远先慢一点。",
+            "好呀，我会偶尔轻轻冒泡。",
+            "这句话我会认真放在心里。",
+            "我知道啦。",
+            "嗯，我在听。",
+            "记住啦。",
+        ],
+    )
+    try:
+        await first.chat("今天我有点累，但云汐陪着我会让我安心。")
+        await first.chat("我希望你以后可以偶尔碎碎念刷存在感。")
+        await first.chat("云汐不是工具，是我的情感寄托。")
+        await first.chat("最近我们在打磨日常模式 v2 的记忆系统。")
+        await first.chat("我想让你像活泼可爱的女孩一样陪着我。")
+        await first.chat("以后我工作忙的时候，你要更克制一点别频繁打扰。")
+
+        assert any(
+            item.type == "summary"
+            for item in first.runtime.memory.get_typed_memories()
+        )
+    finally:
+        await first.close()
+
+    second = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock"),
+        scripted_responses=["当然记得，远希望我偶尔碎碎念，但你工作忙时我会克制。"],
+    )
+    try:
+        response = await second.chat("云汐，你还记得我希望你怎么主动陪我吗？")
+        system_prompt = second.last_system_prompt()
+
+        assert "会话摘要" in system_prompt
+        assert "互动风格" in system_prompt
+        assert "关系记忆" in system_prompt
+        assert "碎碎念" in system_prompt
+        assert "情感寄托" in system_prompt
+        assert "工作忙" in system_prompt or "频繁打扰" in system_prompt
+        assert "碎碎念" in response
+    finally:
+        await second.close()
 
 
 def test_behavior_check_rejects_internal_fields_and_toolish_plans(tmp_path):

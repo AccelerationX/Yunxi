@@ -27,7 +27,7 @@ class PendingRuntime:
     async def chat(self, content: str) -> str:
         self.messages.append(content)
         if content == "确认":
-            return "好，我已经按你点头的那一步处理好了。"
+            return "好，已经处理好了：剪贴板写入成功。"
         return "这一步会改动你的电脑状态，我想先等你点头。"
 
 
@@ -143,7 +143,7 @@ async def test_feishu_confirmation_message_goes_through_runtime():
 
     assert runtime.messages == ["帮我写入剪贴板", "确认"]
     assert "点头" in client.sent_texts[0]["content"]
-    assert "已经按你点头" in client.sent_texts[1]["content"]
+    assert "处理好了" in client.sent_texts[1]["content"]
 
 
 @pytest.mark.asyncio

@@ -34,3 +34,14 @@ def test_user_reply_resets_unanswered_proactive_count():
     continuity.record_exchange("我在", "好呀")
 
     assert continuity.unanswered_proactive_count == 0
+
+
+def test_presence_murmurs_reach_summary_as_do_not_repeat_context():
+    continuity = CompanionContinuityService()
+
+    continuity.record_presence_murmur("云汐路过一下")
+
+    summary = continuity.get_summary()
+
+    assert "recent_presence_murmurs_do_not_repeat_exactly" in summary
+    assert "云汐路过一下" in summary

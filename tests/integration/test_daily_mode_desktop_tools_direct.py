@@ -1,4 +1,4 @@
-"""Direct daily-mode desktop tool validation without Feishu.
+﻿"""Direct daily-mode desktop tool validation without Feishu.
 
 These tests keep the same user-facing flow as live daily mode:
 user asks Yunxi to do something, Yunxi asks for confirmation when the tool is
@@ -154,7 +154,7 @@ async def test_yunxi_direct_clipboard_write_and_read(desktop_hub):
     )
 
     assert "点头" in first
-    assert "已经按你点头" in second
+    assert "处理好了" in second
     assert "已写入" in _assert_tool_result_ok(engine)
 
     read_result = await desktop_hub.execute_single(
@@ -176,7 +176,7 @@ async def test_yunxi_direct_screenshot_capture(desktop_hub, tmp_path):
     )
 
     assert "点头" in first
-    assert "已经按你点头" in second
+    assert "处理好了" in second
     assert "截图已保存" in _assert_tool_result_ok(engine)
     assert path.exists()
     assert path.stat().st_size > 0
@@ -191,7 +191,7 @@ async def test_yunxi_direct_desktop_notify(desktop_hub):
     )
 
     assert "点头" in first
-    assert "已经按你点头" in second
+    assert "处理好了" in second
     assert "通知已发送" in _assert_tool_result_ok(engine)
 
 
@@ -204,7 +204,7 @@ async def test_yunxi_direct_launch_focus_and_minimize_notepad(desktop_hub):
             {"app_name": "notepad"},
         )
         assert "点头" in first
-        assert "已经按你点头" in second
+        assert "处理好了" in second
         assert "成功启动" in _assert_tool_result_ok(engine)
 
         await asyncio.sleep(1.0)
@@ -214,7 +214,7 @@ async def test_yunxi_direct_launch_focus_and_minimize_notepad(desktop_hub):
             {"window_title_keyword": "Notepad"},
         )
         assert "点头" in focus_first
-        assert "已经按你点头" in focus_second
+        assert "处理好了" in focus_second
         assert "已聚焦窗口" in _assert_tool_result_ok(focus_engine)
 
         minimize_first, minimize_second, minimize_engine = await _ask_and_confirm(
@@ -223,7 +223,7 @@ async def test_yunxi_direct_launch_focus_and_minimize_notepad(desktop_hub):
             {"window_title_keyword": "Notepad"},
         )
         assert "点头" in minimize_first
-        assert "已经按你点头" in minimize_second
+        assert "处理好了" in minimize_second
         assert "已最小化窗口" in _assert_tool_result_ok(minimize_engine)
     finally:
         subprocess.run(

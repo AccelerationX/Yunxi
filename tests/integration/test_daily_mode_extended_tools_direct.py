@@ -1,4 +1,4 @@
-"""Direct daily-mode validation for extended tool servers.
+﻿"""Direct daily-mode validation for extended tool servers.
 
 This mirrors the Feishu-free flow used for Desktop MCP validation: Yunxi asks
 for confirmation on WRITE/EXECUTE tools, then the test simulates the user's
@@ -105,6 +105,12 @@ async def extended_hub(tmp_path):
                 "browser_extract_links": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
                 "browser_click": [PermissionLevel.NETWORK.value, PermissionLevel.EXECUTE.value],
                 "browser_type": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
+                "browser_session_open": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+                "browser_session_snapshot": [PermissionLevel.READ.value],
+                "browser_session_click": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+                "browser_session_type": [PermissionLevel.WRITE.value],
+                "browser_session_fill_form": [PermissionLevel.WRITE.value],
+                "browser_session_submit": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
             },
         },
         {
@@ -115,6 +121,8 @@ async def extended_hub(tmp_path):
             "permissions": {
                 "gui_observe": [PermissionLevel.READ.value],
                 "gui_list_macros": [PermissionLevel.READ.value],
+                "gui_macro_stats": [PermissionLevel.READ.value],
+                "gui_verify_text": [PermissionLevel.READ.value],
                 "gui_save_macro": [PermissionLevel.WRITE.value],
                 "gui_run_macro": [PermissionLevel.EXECUTE.value],
                 "gui_click": [PermissionLevel.EXECUTE.value],
@@ -185,7 +193,7 @@ async def test_yunxi_direct_filesystem_and_document_tools(extended_hub):
         {"path": str(note), "content": "# 云汐\n阶段 6 文件工具验收", "overwrite": True},
     )
     assert "点头" in first
-    assert "已经按你点头" in second
+    assert "处理好了" in second
     assert "文件已写入" in _assert_tool_result_ok(engine)
 
     append_first, append_second, append_engine = await _ask_and_confirm(
@@ -194,7 +202,7 @@ async def test_yunxi_direct_filesystem_and_document_tools(extended_hub):
         {"path": str(note), "content": "\n追加一行"},
     )
     assert "点头" in append_first
-    assert "已经按你点头" in append_second
+    assert "处理好了" in append_second
     assert "内容已追加" in _assert_tool_result_ok(append_engine)
 
     read_result = await hub.execute_single("file_read", {"path": str(note)}, SimpleNamespace(mode="daily_mode"))
@@ -238,6 +246,21 @@ async def test_yunxi_direct_filesystem_and_document_tools(extended_hub):
     assert "xlsx 表格读取验收" in xlsx_result.get("content", "")
     assert "daily.md" in grep_result.get("content", "")
 
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=secret", encoding="utf-8")
+    secret_read = await hub.execute_single(
+        "file_read",
+        {"path": str(secret)},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    _, _, secret_write_engine = await _ask_and_confirm(
+        hub,
+        "file_write",
+        {"path": str(secret), "content": "TOKEN=changed", "overwrite": True},
+    )
+    assert "敏感数据" in secret_read.get("content", "")
+    assert "敏感数据" in _latest_tool_result(secret_write_engine)
+
 
 @pytest.mark.asyncio
 async def test_yunxi_direct_browser_tools_with_local_html(extended_hub):
@@ -246,7 +269,9 @@ async def test_yunxi_direct_browser_tools_with_local_html(extended_hub):
     page.write_text(
         "<html><body><h1>Yunxi Browser Fixture</h1>"
         "<p>阶段 6 浏览器读取验收。</p>"
-        "<a href='next.html'>Next Page</a></body></html>",
+        "<a href='next.html'>Next Page</a>"
+        "<form action='/submit'><input name='q' placeholder='search'></form>"
+        "</body></html>",
         encoding="utf-8",
     )
     (tmp_path / "next.html").write_text("<html><body>next</body></html>", encoding="utf-8")
@@ -281,6 +306,31 @@ async def test_yunxi_direct_browser_tools_with_local_html(extended_hub):
         "browser_type",
         {"text": "yunxi-browser-type"},
     )
+    session_result = await hub.execute_single(
+        "browser_session_open",
+        {"url": page.as_uri()},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    snapshot_result = await hub.execute_single(
+        "browser_session_snapshot",
+        {"max_chars": 2000},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    click_session_result = await hub.execute_single(
+        "browser_session_click",
+        {"link_text": "Next Page"},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    _, _, session_type_engine = await _ask_and_confirm(
+        hub,
+        "browser_session_fill_form",
+        {"fields_json": json.dumps({"q": "yunxi session"})},
+    )
+    _, _, session_submit_engine = await _ask_and_confirm(
+        hub,
+        "browser_session_submit",
+        {"dry_run": True},
+    )
 
     assert "Yunxi Browser Fixture" in read_result.get("content", "")
     assert "Next Page" in links_result.get("content", "")
@@ -288,6 +338,11 @@ async def test_yunxi_direct_browser_tools_with_local_html(extended_hub):
     assert "浏览器" in _assert_tool_result_ok(open_engine)
     assert "Next Page" in _assert_tool_result_ok(click_engine)
     assert "当前焦点" in _assert_tool_result_ok(type_engine)
+    assert "Yunxi Browser Fixture" in session_result.get("content", "")
+    assert "表单" in snapshot_result.get("content", "")
+    assert "next" in click_session_result.get("content", "")
+    assert "yunxi session" in _assert_tool_result_ok(session_type_engine)
+    assert "提交预演" in _assert_tool_result_ok(session_submit_engine)
 
 
 @pytest.mark.asyncio
@@ -297,6 +352,7 @@ async def test_yunxi_direct_gui_agent_macro_tools(extended_hub):
         [
             {"action": "type", "text": "hello {name}"},
             {"action": "hotkey", "keys": "ctrl+s"},
+            {"action": "verify_text", "expected_text": "hello {name}"},
         ],
         ensure_ascii=False,
     )
@@ -304,10 +360,15 @@ async def test_yunxi_direct_gui_agent_macro_tools(extended_hub):
     first, second, engine = await _ask_and_confirm(
         hub,
         "gui_save_macro",
-        {"name": "daily_macro", "steps_json": steps, "trigger": "测试宏"},
+        {
+            "name": "daily_macro",
+            "steps_json": steps,
+            "trigger": "测试宏",
+            "window_title_keyword": "Notepad",
+        },
     )
     assert "点头" in first
-    assert "已经按你点头" in second
+    assert "处理好了" in second
     assert "GUI 宏已保存" in _assert_tool_result_ok(engine)
 
     list_result = await hub.execute_single("gui_list_macros", {}, SimpleNamespace(mode="daily_mode"))
@@ -319,9 +380,39 @@ async def test_yunxi_direct_gui_agent_macro_tools(extended_hub):
         {"name": "daily_macro", "params_json": json.dumps({"name": "yunxi"}), "dry_run": True},
     )
     assert "点头" in run_first
-    assert "已经按你点头" in run_second
+    assert "处理好了" in run_second
     result = _assert_tool_result_ok(run_engine)
     assert "hello yunxi" in result
+    assert "verify_text" in result
+    assert "Notepad" in result
+
+    stats_result = await hub.execute_single(
+        "gui_macro_stats",
+        {"name": "daily_macro"},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    assert "window_title_keyword" in stats_result.get("content", "")
+    assert "runs" in stats_result.get("content", "")
+
+    failure_steps = json.dumps([{"action": "missing_action"}], ensure_ascii=False)
+    _, _, save_failure_macro_engine = await _ask_and_confirm(
+        hub,
+        "gui_save_macro",
+        {"name": "failure_macro", "steps_json": failure_steps},
+    )
+    assert "GUI 宏已保存" in _assert_tool_result_ok(save_failure_macro_engine)
+    _, _, run_failure_macro_engine = await _ask_and_confirm(
+        hub,
+        "gui_run_macro",
+        {"name": "failure_macro", "dry_run": False},
+    )
+    assert "未知宏动作" in _latest_tool_result(run_failure_macro_engine)
+    failure_stats = await hub.execute_single(
+        "gui_macro_stats",
+        {"name": "failure_macro"},
+        SimpleNamespace(mode="daily_mode"),
+    )
+    assert '"failures": 1' in failure_stats.get("content", "")
 
 
 @pytest.mark.asyncio

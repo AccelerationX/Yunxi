@@ -60,15 +60,40 @@ def test_perception_focused_application():
     builder = YunxiPromptBuilder(PromptConfig(enable_perception=True))
     snapshot = PerceptionSnapshot(
         time_context=TimeContext(readable_time="2026-04-15 10:00"),
-        user_presence=UserPresence(focused_application="VS Code", idle_duration=0),
+        user_presence=UserPresence(
+            focused_application="VS Code",
+            foreground_process_name="Code.exe",
+            idle_duration=0,
+            input_events_per_minute=18,
+        ),
         system_state=SystemState(cpu_percent=45),
         external_info=ExternalInfo(weather="晴朗 22°C"),
     )
     ctx = RuntimeContext(perception_snapshot=snapshot)
     prompt = builder.build_system_prompt(ctx)
     assert "VS Code" in prompt
+    assert "Code.exe" in prompt
+    assert "work" in prompt
+    assert "18次/分钟" in prompt
     assert "45%" in prompt
     assert "晴朗" in prompt
+
+
+def test_perception_includes_fullscreen_state():
+    builder = YunxiPromptBuilder(PromptConfig(enable_perception=True))
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="Steam Game",
+            foreground_process_name="game.exe",
+            is_fullscreen=True,
+        ),
+    )
+
+    prompt = builder.build_system_prompt(RuntimeContext(perception_snapshot=snapshot))
+
+    assert "全屏" in prompt
+    assert "game.exe" in prompt
+    assert "game" in prompt
 
 
 def test_emotion_section_content():
@@ -79,6 +104,20 @@ def test_emotion_section_content():
     prompt = builder.build_system_prompt(ctx)
     assert "想念" in prompt
     assert "表达思念" in prompt
+
+
+def test_emotion_section_includes_compound_labels():
+    builder = YunxiPromptBuilder(PromptConfig(enable_emotion=True))
+    hl = HeartLake()
+    hl.current_emotion = "担心"
+    hl.compound_labels = ["担心但想陪着", "关系被记起"]
+    ctx = RuntimeContext(heart_lake_state=hl)
+
+    prompt = builder.build_system_prompt(ctx)
+
+    assert "复合情绪线索" in prompt
+    assert "担心但想陪着" in prompt
+    assert "关系被记起" in prompt
 
 
 def test_reaction_guidance_uses_user_input_without_template_copy():

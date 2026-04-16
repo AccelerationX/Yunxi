@@ -7,6 +7,7 @@ from apps.tray.web_server import (
     build_runtime_status,
     create_status_app,
 )
+from domains.perception.coordinator import UserPresence
 from tests.integration.conversation_tester import YunxiConversationTester
 
 
@@ -41,6 +42,24 @@ def test_tray_status_reflects_runtime_state():
     tester.reset()
     tester.set_heart_lake(emotion="开心", miss_value=12)
     tester.runtime.continuity.record_exchange("你好", "远～")
+    tester.runtime.continuity.record_presence_murmur("云汐冒泡一下")
+    tester.runtime.memory.skill_library.add_candidate(
+        {
+            "skill_name": "daily_candidate",
+            "trigger_patterns": ["测试候选技能"],
+            "parameters": [],
+            "actions": [{"tool": "file_read", "args": {"path": "x"}}],
+        },
+        reason="phase5 status test",
+    )
+    tester.set_perception(
+        user_presence=UserPresence(
+            focused_application="Bilibili - Chrome",
+            foreground_process_name="chrome.exe",
+            is_fullscreen=True,
+            input_events_per_minute=12,
+        )
+    )
 
     status = build_runtime_status(tester.runtime)
 
@@ -48,6 +67,14 @@ def test_tray_status_reflects_runtime_state():
     assert status.emotion == "开心"
     assert status.miss_value == 12
     assert status.continuity_size == 1
+    assert status.foreground_process_name == "chrome.exe"
+    assert status.activity_state == "leisure"
+    assert status.is_fullscreen is True
+    assert status.input_events_per_minute == 12
+    assert status.presence_murmur_count == 1
+    assert status.recent_presence_murmurs == ["云汐冒泡一下"]
+    assert status.skill_candidate_count == 1
+    assert status.skill_candidates[0]["skill_name"] == "daily_candidate"
     assert status.daily_channel == "feishu"
     assert status.factory_entry_command == "yunxi"
 
@@ -75,3 +102,6 @@ def test_status_app_exposes_control_panel_routes():
     assert "/api/status" in route_paths
     assert "/api/logs" in route_paths
     assert "/api/factory-entry" in route_paths
+    assert "/api/skills/candidates" in route_paths
+    assert "/api/skills/approve" in route_paths
+    assert "/api/skills/reject" in route_paths

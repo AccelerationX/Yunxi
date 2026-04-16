@@ -134,6 +134,11 @@ class YunxiPromptBuilder:
         miss = getattr(hl, "miss_value", 0)
         security = getattr(hl, "security", 0)
         possessiveness = getattr(hl, "possessiveness", 0)
+        trust = getattr(hl, "trust", 0)
+        tenderness = getattr(hl, "tenderness", 0)
+        playfulness = getattr(hl, "playfulness", 0)
+        vulnerability = getattr(hl, "vulnerability", 0)
+        intimacy_warmth = getattr(hl, "intimacy_warmth", 0)
         relationship_level = getattr(hl, "relationship_level", 4)
         profile_text = "\n".join(self.relationship_profile.build_prompt_lines())
         return (
@@ -144,11 +149,17 @@ class YunxiPromptBuilder:
             f"\u4f60\u5bf9\u8fdc\u7684\u60f3\u5ff5\u503c\uff1a{miss:.0f}/100\n"
             f"\u4f60\u7684\u5b89\u5168\u611f\uff1a{security:.0f}/100\n"
             f"\u4f60\u7684\u5360\u6709\u6b32\uff1a{possessiveness:.0f}/100\n"
+            f"你对远的信任感：{trust:.0f}/100\n"
+            f"你现在的温柔照顾倾向：{tenderness:.0f}/100\n"
+            f"你现在的俏皮感：{playfulness:.0f}/100\n"
+            f"你现在的脆弱感：{vulnerability:.0f}/100\n"
+            f"你们之间的亲近暖意：{intimacy_warmth:.0f}/100\n"
         )
 
     def _build_emotion_section(self, context: RuntimeContext) -> str:
         hl = context.heart_lake_state
         dominant = getattr(hl, "current_emotion", "平静")
+        compound_labels = getattr(hl, "compound_labels", []) or []
         emotion_hints = {
             "开心": "语气轻快，可以分享喜悦",
             "委屈": "语气带点撒娇和埋怨，但不要太重",
@@ -168,6 +179,7 @@ class YunxiPromptBuilder:
         return (
             f"【情感指引】\n"
             f"你当前的主导情绪是：{dominant}\n"
+            f"你当前的复合情绪线索：{'、'.join(compound_labels) if compound_labels else '无明显复合情绪'}\n"
             f"表达要求：{emotion_hint}\n"
         )
 
@@ -212,6 +224,17 @@ class YunxiPromptBuilder:
             app = getattr(p.user_presence, "focused_application", "")
             if app:
                 lines.append(f"远当前正在使用的应用：{app}")
+            process_name = getattr(p.user_presence, "foreground_process_name", "")
+            if process_name:
+                lines.append(f"前台进程：{process_name}")
+            activity_state = getattr(p.user_presence, "activity_state", "")
+            if activity_state:
+                lines.append(f"电脑使用状态：{activity_state}")
+            if getattr(p.user_presence, "is_fullscreen", False):
+                lines.append("前台窗口状态：全屏")
+            input_rate = getattr(p.user_presence, "input_events_per_minute", 0)
+            if input_rate:
+                lines.append(f"近似输入频率：{input_rate:.0f}次/分钟")
             idle = getattr(p.user_presence, "idle_duration", 0)
             if idle:
                 lines.append(f"远的空闲时长：{idle:.0f}秒")

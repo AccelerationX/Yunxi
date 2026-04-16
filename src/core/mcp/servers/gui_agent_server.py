@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -118,7 +119,8 @@ def gui_run_task(task: str, dry_run: bool = True) -> str:
         return (
             "GUI 任务已解析为安全预演：\n"
             f"- 任务：{task}\n"
-            "- 可用步骤：gui_observe -> gui_click/gui_type/gui_hotkey -> gui_observe 验证\n"
+            "- 闭环步骤：observe -> plan -> act -> verify -> replan\n"
+            "- 可用动作：gui_observe -> gui_click/gui_type/gui_hotkey -> gui_verify_text\n"
             "- 当前未执行真实点击或输入"
         )
 
@@ -133,7 +135,12 @@ def gui_run_task(task: str, dry_run: bool = True) -> str:
 
 
 @mcp.tool()
-def gui_save_macro(name: str, steps_json: str, trigger: str = "") -> str:
+def gui_save_macro(
+    name: str,
+    steps_json: str,
+    trigger: str = "",
+    window_title_keyword: str = "",
+) -> str:
     """Save a GUI macro. steps_json must be a JSON list of action dicts."""
     try:
         steps = json.loads(steps_json)
@@ -142,7 +149,15 @@ def gui_save_macro(name: str, steps_json: str, trigger: str = "") -> str:
         macro = {
             "name": name,
             "trigger": trigger,
+            "window_title_keyword": window_title_keyword,
             "steps": steps,
+            "stats": {
+                "runs": 0,
+                "successes": 0,
+                "failures": 0,
+                "last_run_at": 0.0,
+                "last_failure": "",
+            },
         }
         path = _macro_dir() / f"{_safe_macro_name(name)}.json"
         path.write_text(json.dumps(macro, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -154,8 +169,32 @@ def gui_save_macro(name: str, steps_json: str, trigger: str = "") -> str:
 @mcp.tool()
 def gui_list_macros() -> str:
     """List saved GUI macros."""
-    macros = sorted(path.stem for path in _macro_dir().glob("*.json"))
-    return "\n".join(macros) if macros else "[暂无 GUI 宏]"
+    rows: list[str] = []
+    for path in sorted(_macro_dir().glob("*.json")):
+        try:
+            macro = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            rows.append(path.stem)
+            continue
+        stats = macro.get("stats", {}) if isinstance(macro, dict) else {}
+        rows.append(
+            f"{path.stem}\truns={stats.get('runs', 0)}\t"
+            f"success={stats.get('successes', 0)}\tfailure={stats.get('failures', 0)}"
+        )
+    return "\n".join(rows) if rows else "[暂无 GUI 宏]"
+
+
+@mcp.tool()
+def gui_macro_stats(name: str) -> str:
+    """Return stored macro metadata and run statistics."""
+    try:
+        path = _macro_dir() / f"{_safe_macro_name(name)}.json"
+        if not path.exists():
+            return f"[宏统计失败：宏不存在：{name}]"
+        macro = json.loads(path.read_text(encoding="utf-8"))
+        return json.dumps(macro, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return f"[宏统计失败：{exc}]"
 
 
 @mcp.tool()
@@ -170,9 +209,17 @@ def gui_run_macro(name: str, params_json: str = "{}", dry_run: bool = True) -> s
         if not isinstance(params, dict):
             return "[执行宏失败：params_json 必须是 JSON object]"
         steps = _render_steps(macro.get("steps", []), params)
+        window_title_keyword = str(
+            macro.get("window_title_keyword") or params.get("window_title_keyword") or ""
+        )
+        if window_title_keyword:
+            for step in steps:
+                step.setdefault("window_title_keyword", window_title_keyword)
         if dry_run:
             return "GUI 宏预演：\n" + json.dumps(steps, ensure_ascii=False, indent=2)
-        return _execute_macro_steps(steps)
+        result = _execute_macro_steps(steps)
+        _record_macro_run(path, macro, result)
+        return result
     except Exception as exc:
         return f"[执行宏失败：{exc}]"
 
@@ -198,6 +245,13 @@ def _execute_macro_steps(steps: list[dict[str, Any]]) -> str:
             results.append(gui_type(str(step.get("text", ""))))
         elif action == "hotkey":
             results.append(gui_hotkey(str(step.get("keys", ""))))
+        elif action == "verify_text":
+            results.append(
+                gui_verify_text(
+                    expected_text=str(step.get("expected_text", "")),
+                    window_title_keyword=str(step.get("window_title_keyword", "")),
+                )
+            )
         elif action == "click":
             results.append(
                 gui_click(
@@ -209,6 +263,41 @@ def _execute_macro_steps(steps: list[dict[str, Any]]) -> str:
         else:
             results.append(f"[跳过未知宏动作：{action}]")
     return "\n".join(results)
+
+
+@mcp.tool()
+def gui_verify_text(expected_text: str, window_title_keyword: str = "") -> str:
+    """Verify that observed UIA text contains expected text."""
+    if not expected_text:
+        return "[GUI 验证失败：expected_text 不能为空]"
+    observed = gui_observe(window_title_keyword=window_title_keyword, max_controls=120)
+    if expected_text in observed:
+        return f"GUI 验证通过：找到文本 {expected_text}"
+    return f"[GUI 验证失败：未找到文本 {expected_text}]"
+
+
+def _record_macro_run(path: Path, macro: dict[str, Any], result: str) -> None:
+    stats = macro.get("stats")
+    if not isinstance(stats, dict):
+        stats = {}
+    failed = "[" in result or "失败" in result or "未找到" in result
+    stats["runs"] = int(stats.get("runs", 0)) + 1
+    stats["last_run_at"] = time.time()
+    if failed:
+        stats["failures"] = int(stats.get("failures", 0)) + 1
+        stats["last_failure"] = _first_failure_line(result)
+    else:
+        stats["successes"] = int(stats.get("successes", 0)) + 1
+        stats["last_failure"] = ""
+    macro["stats"] = stats
+    path.write_text(json.dumps(macro, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _first_failure_line(result: str) -> str:
+    for line in result.splitlines():
+        if "[" in line or "失败" in line or "未找到" in line:
+            return line[:240]
+    return ""
 
 
 def _send_keys_with_powershell(text: str) -> bool:

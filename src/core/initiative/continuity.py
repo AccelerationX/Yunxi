@@ -15,6 +15,9 @@ DEFAULT_MAX_EXCHANGES = 50
 DEFAULT_SUMMARY_LIMIT = 20
 DEFAULT_MAX_OPEN_THREADS = 12
 DEFAULT_MAX_RECENT_TOPICS = 20
+DEFAULT_MAX_RECENT_PRESENCE_MURMURS = 10000
+DEFAULT_DAILY_PRESENCE_MURMUR_BUDGET = 6
+DEFAULT_PRESENCE_MURMUR_COOLDOWN_SECONDS = 900.0
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,10 @@ class CompanionContinuityService:
     comfort_needed: bool = False
     task_focus: str = ""
     fragmented_chat: bool = False
+    presence_murmur_count: int = 0
+    presence_murmur_count_date: str = ""
+    last_presence_murmur_at: float = 0.0
+    recent_presence_murmurs: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if isinstance(self.storage_path, str):
@@ -144,6 +151,8 @@ class CompanionContinuityService:
             self._load()
         if not self.proactive_count_date:
             self.proactive_count_date = _date_key()
+        if not self.presence_murmur_count_date:
+            self.presence_murmur_count_date = _date_key()
 
     def record_exchange(
         self,
@@ -185,6 +194,86 @@ class CompanionContinuityService:
             self.proactive_count_date = today
             self.recent_proactive_count = 0
             self.save()
+
+    def refresh_daily_presence_murmur_count(
+        self,
+        current_time: Optional[float] = None,
+    ) -> None:
+        """Reset the presence-murmur budget counter when the local date changes."""
+        today = _date_key(current_time)
+        if not self.presence_murmur_count_date:
+            self.presence_murmur_count_date = today
+            return
+        if self.presence_murmur_count_date != today:
+            self.presence_murmur_count_date = today
+            self.presence_murmur_count = 0
+            self.save()
+
+    def can_send_presence_murmur(
+        self,
+        current_time: Optional[float] = None,
+        *,
+        cooldown_seconds: float = DEFAULT_PRESENCE_MURMUR_COOLDOWN_SECONDS,
+        daily_budget: int = DEFAULT_DAILY_PRESENCE_MURMUR_BUDGET,
+    ) -> bool:
+        """Return whether a low-cost presence murmur can be sent now."""
+        now = current_time if current_time is not None else time.time()
+        self.refresh_daily_presence_murmur_count(now)
+        if self.presence_murmur_count >= daily_budget:
+            return False
+        if (
+            self.last_presence_murmur_at > 0
+            and now - self.last_presence_murmur_at < cooldown_seconds
+        ):
+            return False
+        return True
+
+    def presence_murmur_suppression_reason(
+        self,
+        current_time: Optional[float] = None,
+        *,
+        cooldown_seconds: float = DEFAULT_PRESENCE_MURMUR_COOLDOWN_SECONDS,
+        daily_budget: int = DEFAULT_DAILY_PRESENCE_MURMUR_BUDGET,
+    ) -> str:
+        """Explain why a presence murmur is currently unavailable."""
+        now = current_time if current_time is not None else time.time()
+        self.refresh_daily_presence_murmur_count(now)
+        if self.presence_murmur_count >= daily_budget:
+            return "presence_murmur_daily_budget_exhausted"
+        if (
+            self.last_presence_murmur_at > 0
+            and now - self.last_presence_murmur_at < cooldown_seconds
+        ):
+            return "presence_murmur_cooldown"
+        return ""
+
+    def has_recent_presence_murmur(self, message: str) -> bool:
+        """Return whether this exact murmur sentence has been used recently."""
+        normalized = _normalize_presence_murmur(message)
+        if not normalized:
+            return False
+        return normalized in self.recent_presence_murmurs
+
+    def record_presence_murmur(
+        self,
+        message: str,
+        current_time: Optional[float] = None,
+    ) -> None:
+        """Record one delivered presence murmur for uniqueness and budgeting."""
+        normalized = _normalize_presence_murmur(message)
+        if not normalized:
+            return
+        now = current_time if current_time is not None else time.time()
+        self.refresh_daily_presence_murmur_count(now)
+        if normalized in self.recent_presence_murmurs:
+            self.recent_presence_murmurs.remove(normalized)
+        self.recent_presence_murmurs.append(normalized)
+        self.recent_presence_murmurs = self.recent_presence_murmurs[
+            -DEFAULT_MAX_RECENT_PRESENCE_MURMURS:
+        ]
+        self.presence_murmur_count += 1
+        self.last_presence_murmur_at = now
+        self.save()
 
     def add_open_thread(self, title: str, detail: str = "") -> None:
         """Add or update an unfinished conversation thread."""
@@ -357,6 +446,11 @@ class CompanionContinuityService:
             lines.append("recent_initiative_events:")
             for event in self.initiative_events[-3:]:
                 lines.append(f"- {event.category}: {event.seed}")
+        if self.recent_presence_murmurs:
+            recent_murmurs = " / ".join(self.recent_presence_murmurs[-6:])
+            lines.append(
+                "recent_presence_murmurs_do_not_repeat_exactly: " + recent_murmurs
+            )
 
         if self.comfort_needed:
             lines.append("comfort_needed: true")
@@ -390,6 +484,10 @@ class CompanionContinuityService:
         self.comfort_needed = False
         self.task_focus = ""
         self.fragmented_chat = False
+        self.presence_murmur_count = 0
+        self.presence_murmur_count_date = _date_key()
+        self.last_presence_murmur_at = 0.0
+        self.recent_presence_murmurs.clear()
         self.save()
 
     def save(self) -> None:
@@ -425,6 +523,10 @@ class CompanionContinuityService:
             "comfort_needed": self.comfort_needed,
             "task_focus": self.task_focus,
             "fragmented_chat": self.fragmented_chat,
+            "presence_murmur_count": self.presence_murmur_count,
+            "presence_murmur_count_date": self.presence_murmur_count_date,
+            "last_presence_murmur_at": self.last_presence_murmur_at,
+            "recent_presence_murmurs": self.recent_presence_murmurs,
         }
 
     def _load(self) -> None:
@@ -468,6 +570,16 @@ class CompanionContinuityService:
         self.comfort_needed = bool(data.get("comfort_needed", False))
         self.task_focus = str(data.get("task_focus", ""))
         self.fragmented_chat = bool(data.get("fragmented_chat", False))
+        self.presence_murmur_count = int(data.get("presence_murmur_count", 0))
+        self.presence_murmur_count_date = (
+            str(data.get("presence_murmur_count_date", "")) or _date_key()
+        )
+        self.last_presence_murmur_at = float(data.get("last_presence_murmur_at", 0.0))
+        self.recent_presence_murmurs = [
+            _normalize_presence_murmur(item)
+            for item in _string_list(data.get("recent_presence_murmurs", []))
+            if _normalize_presence_murmur(item)
+        ]
         self._trim()
 
     def _capture_recent_topic(self, text: str) -> None:
@@ -487,6 +599,9 @@ class CompanionContinuityService:
         self.initiative_events = self.initiative_events[-DEFAULT_MAX_RECENT_TOPICS:]
         self.recent_topics = self.recent_topics[-DEFAULT_MAX_RECENT_TOPICS:]
         self.proactive_cues = self.proactive_cues[-DEFAULT_MAX_RECENT_TOPICS:]
+        self.recent_presence_murmurs = self.recent_presence_murmurs[
+            -DEFAULT_MAX_RECENT_PRESENCE_MURMURS:
+        ]
 
     def _add_or_update_open_thread(self, title: str, detail: str = "") -> None:
         clean_title = title.strip()
@@ -531,3 +646,7 @@ def _date_key(timestamp: Optional[float] = None) -> str:
 def _compact_text(text: str, limit: int) -> str:
     compacted = " ".join(text.strip().split())
     return compacted[:limit]
+
+
+def _normalize_presence_murmur(text: object) -> str:
+    return " ".join(str(text).strip().split())

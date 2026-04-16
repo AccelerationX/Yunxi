@@ -4,6 +4,7 @@
 并支持根据感知事件自动更新情感状态。
 """
 
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -15,19 +16,53 @@ class HeartLake:
 
     def __init__(self) -> None:
         self.current_emotion: str = "平静"
+        self.valence: float = 0.0
+        self.arousal: float = 0.0
         self.miss_value: float = 0.0
         self.security: float = 80.0
         self.possessiveness: float = 30.0
+        self.attachment: float = 55.0
+        self.trust: float = 70.0
+        self.tenderness: float = 55.0
+        self.playfulness: float = 45.0
+        self.vulnerability: float = 20.0
+        self.intimacy_warmth: float = 60.0
         self.relationship_level: int = 4
+        self.compound_labels: List[str] = []
+        self.last_appraisal_reason: str = ""
+        self._last_semantic_appraisal_at: float = 0.0
+        self._emotion_cooldowns: Dict[str, float] = {}
+        self._recovery_targets: Dict[str, float] = {
+            "valence": 0.0,
+            "arousal": 0.0,
+            "security": 80.0,
+            "possessiveness": 30.0,
+            "attachment": 55.0,
+            "trust": 70.0,
+            "tenderness": 55.0,
+            "playfulness": 45.0,
+            "vulnerability": 20.0,
+            "intimacy_warmth": 60.0,
+        }
 
     def get_state_snapshot(self) -> "HeartLakeSnapshot":
         """返回当前状态的只读快照。"""
         return HeartLakeSnapshot(
             current_emotion=self.current_emotion,
+            valence=self.valence,
+            arousal=self.arousal,
             miss_value=self.miss_value,
             security=self.security,
             possessiveness=self.possessiveness,
+            attachment=self.attachment,
+            trust=self.trust,
+            tenderness=self.tenderness,
+            playfulness=self.playfulness,
+            vulnerability=self.vulnerability,
+            intimacy_warmth=self.intimacy_warmth,
             relationship_level=self.relationship_level,
+            compound_labels=list(self.compound_labels),
+            last_appraisal_reason=self.last_appraisal_reason,
         )
 
     def update_from_perception(
@@ -40,6 +75,7 @@ class HeartLake:
         idle = getattr(snapshot.user_presence, "idle_duration", 0.0)
         app = getattr(snapshot.user_presence, "focused_application", "")
         hour = getattr(snapshot.time_context, "hour", 12)
+        self.apply_natural_recovery(elapsed_seconds)
 
         # 想念值自然变化
         if idle >= 300:
@@ -67,7 +103,11 @@ class HeartLake:
             self.current_emotion = "担心"
         elif self.miss_value > 70:
             self.current_emotion = "想念"
-        elif self.miss_value < 20 and self.security > 70:
+        elif (
+            self.miss_value < 20
+            and self.security > 70
+            and self.current_emotion == "想念"
+        ):
             self.current_emotion = "平静"
 
     def should_proactive(self) -> bool:
@@ -93,6 +133,71 @@ class HeartLake:
         elif valence >= 0.5:
             self.current_emotion = "开心"
 
+    def apply_emotion_delta(
+        self,
+        deltas: Dict[str, float],
+        *,
+        primary_label: str = "",
+        compound_labels: Optional[List[str]] = None,
+        reason: str = "",
+        confidence: float = 1.0,
+        cooldown_seconds: float = 90.0,
+    ) -> None:
+        """Apply semantic emotion-appraisal deltas with bounded dynamics."""
+        now = time.time()
+        cooldown_key = primary_label or ",".join(compound_labels or []) or "semantic"
+        cooldown_until = self._emotion_cooldowns.get(cooldown_key, 0.0)
+        scale = _clamp(float(confidence), 0.25, 1.0)
+        if now < cooldown_until:
+            scale *= 0.45
+
+        for key, delta in deltas.items():
+            if not hasattr(self, key):
+                continue
+            current = getattr(self, key)
+            if not isinstance(current, (int, float)):
+                continue
+            adjusted_delta = float(delta) * scale
+            if key in {"valence", "arousal"}:
+                setattr(self, key, _clamp(float(current) + adjusted_delta, -100.0, 100.0))
+            else:
+                setattr(self, key, _clamp(float(current) + adjusted_delta, 0.0, 100.0))
+
+        if primary_label:
+            self.current_emotion = primary_label
+            self._emotion_cooldowns[cooldown_key] = now + cooldown_seconds
+        if compound_labels is not None:
+            self.compound_labels = [label for label in compound_labels if label]
+        if reason:
+            self.last_appraisal_reason = reason
+        self._last_semantic_appraisal_at = now
+
+    def apply_natural_recovery(self, elapsed_seconds: float = 60.0) -> None:
+        """Move volatile emotion dimensions slowly back to their baseline."""
+        elapsed = max(0.0, float(elapsed_seconds))
+        if elapsed <= 0:
+            return
+        # About 12 minutes to cover half the distance to baseline for most dimensions.
+        fraction = min(0.35, elapsed / 720.0)
+        for key, target in self._recovery_targets.items():
+            current = getattr(self, key, None)
+            if not isinstance(current, (int, float)):
+                continue
+            if abs(float(current) - target) < 0.01:
+                continue
+            next_value = float(current) + (target - float(current)) * fraction
+            if key in {"valence", "arousal"}:
+                setattr(self, key, _clamp(next_value, -100.0, 100.0))
+            else:
+                setattr(self, key, _clamp(next_value, 0.0, 100.0))
+
+        if self.vulnerability <= 24 and self.current_emotion == "委屈":
+            self.current_emotion = "平静"
+            self.compound_labels = []
+        if self.possessiveness <= 36 and self.current_emotion == "吃醋":
+            self.current_emotion = "平静"
+            self.compound_labels = []
+
     def get_proactive_reason(self) -> str:
         """获取主动触发的情感原因描述。"""
         if self.current_emotion == "想念":
@@ -107,6 +212,8 @@ class HeartLake:
         """记录一次成功互动后的情感回落。"""
         self.miss_value = max(0.0, self.miss_value - 15.0)
         self.security = min(100.0, self.security + 5.0)
+        self.vulnerability = max(0.0, self.vulnerability - 3.0)
+        self.trust = min(100.0, self.trust + 1.0)
         if self.miss_value < 70 and self.current_emotion == "想念":
             self.current_emotion = "平静"
 
@@ -117,13 +224,37 @@ class HeartLakeSnapshot:
     def __init__(
         self,
         current_emotion: str,
+        valence: float,
+        arousal: float,
         miss_value: float,
         security: float,
         possessiveness: float,
+        attachment: float,
+        trust: float,
+        tenderness: float,
+        playfulness: float,
+        vulnerability: float,
+        intimacy_warmth: float,
         relationship_level: int,
+        compound_labels: Optional[List[str]] = None,
+        last_appraisal_reason: str = "",
     ):
         self.current_emotion = current_emotion
+        self.valence = valence
+        self.arousal = arousal
         self.miss_value = miss_value
         self.security = security
         self.possessiveness = possessiveness
+        self.attachment = attachment
+        self.trust = trust
+        self.tenderness = tenderness
+        self.playfulness = playfulness
+        self.vulnerability = vulnerability
+        self.intimacy_warmth = intimacy_warmth
         self.relationship_level = relationship_level
+        self.compound_labels = compound_labels or []
+        self.last_appraisal_reason = last_appraisal_reason
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return min(upper, max(lower, value))

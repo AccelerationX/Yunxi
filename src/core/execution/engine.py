@@ -112,6 +112,7 @@ class YunxiExecutionEngine:
             pending_result = await self._handle_pending_confirmation_message(
                 user_input,
                 runtime_context,
+                system_prompt,
             )
             if pending_result is not None:
                 return pending_result
@@ -294,6 +295,7 @@ class YunxiExecutionEngine:
         self,
         user_input: str,
         runtime_context: Any,
+        system_prompt: str,
     ) -> Optional[ExecutionResult]:
         if not user_input or not self.mcp_hub.has_pending_confirmations():
             return None
@@ -307,25 +309,88 @@ class YunxiExecutionEngine:
 
         chain_result = await self.mcp_hub.approve_latest_pending(runtime_context)
         self._add_chain_results_to_context(chain_result.results)
-        if any(result.get("is_error") for result in chain_result.results):
-            response = self._friendly_tool_failure()
-            error = "; ".join(
+        has_error = any(result.get("is_error") for result in chain_result.results)
+        response = await self._build_tool_response_via_llm(
+            user_input=user_input,
+            system_prompt=system_prompt,
+            results=chain_result.results,
+            all_success=not has_error,
+        )
+        error = (
+            "; ".join(
                 result.get("error", "")
                 for result in chain_result.results
                 if result.get("is_error")
             )
-            self.context.add_assistant_message(response)
-            return ExecutionResult(content=response, error=error)
-        response = "好，我已经按你点头的那一步处理好了。"
+            if has_error
+            else None
+        )
         self.context.add_assistant_message(response)
         return ExecutionResult(
             content=response,
+            error=error,
             tool_calls_used=[
                 result.get("call_id", "")
                 for result in chain_result.results
                 if result.get("call_id")
             ],
         )
+
+    async def _build_tool_response_via_llm(
+        self,
+        *,
+        user_input: str,
+        system_prompt: str,
+        results: List[Dict[str, Any]],
+        all_success: bool,
+    ) -> str:
+        """Let the LLM turn approved tool results into a natural reply."""
+        summary = json.dumps(results, ensure_ascii=False)
+        guidance = (
+            "刚才远已经确认了工具操作，工具现在执行完了。请用云汐的自然语气回复远，"
+            "只说真实结果、必要的后续建议和需要远知道的风险；不要说 JSON、call_id、"
+            "tool_use、内部字段或系统提示。失败时请按原因自然说明，不要暴露堆栈。"
+            f"\n远刚才的确认话语：{user_input}\n处理是否成功：{all_success}\n结果摘要：{summary}"
+        )
+        try:
+            response = await self.llm.complete(
+                system=system_prompt,
+                messages=self.context.get_messages() + [UserMessage(content=guidance)],
+                tools=None,
+            )
+            content = (getattr(response, "content", "") or "").strip()
+            if content:
+                return content
+        except Exception as exc:
+            logger.warning("Tool response LLM finalization failed: %s", exc)
+        return self._fallback_tool_response(results=results, all_success=all_success)
+
+    def _fallback_tool_response(
+        self,
+        *,
+        results: List[Dict[str, Any]],
+        all_success: bool,
+    ) -> str:
+        summary = self._compact_tool_result_for_user(results)
+        if not all_success:
+            return (
+                "远，这一步我没能稳稳办成。"
+                f"{summary} 我先停住，不乱动你的电脑。"
+            )
+        if summary:
+            return f"好，已经处理好了：{summary}"
+        return "好，已经处理好了。"
+
+    def _compact_tool_result_for_user(self, results: List[Dict[str, Any]]) -> str:
+        parts: List[str] = []
+        for result in results:
+            text = str(result.get("content") or result.get("error") or "").strip()
+            if not text:
+                continue
+            text = text.replace("\n", " ")
+            text = " ".join(text.split())
+            parts.append(text[:180])
+        return "；".join(parts[:3])
 
     def _pending_confirmation_from_results(
         self,

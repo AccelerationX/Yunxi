@@ -88,6 +88,13 @@ class ExpressionContextBuilder:
         elif mode == "soft_missing":
             stance = "表达想念，但不要显得黏人或需要远立刻安抚。"
             tone = "轻轻想念、自然开场。"
+        elif mode == "presence_murmur":
+            max_sentences = 1
+            interrupt_cost = "low"
+            stance = "像路过一样刷一下存在感，可以没有实质内容。"
+            tone = "短、活泼、可爱、低负担，像一句碎碎念。"
+            boundaries.append("不要分享新闻，不要提出任务，不要要求远回复")
+            boundaries.append("不要复用最近已经说过的碎碎念原句")
 
         if continuity is not None and continuity.comfort_needed:
             stance = "先照顾远的情绪，再决定要不要继续聊。"
@@ -117,8 +124,19 @@ class ExpressionContextBuilder:
             return "normal"
         idle_duration = float(getattr(user_presence, "idle_duration", 0.0) or 0.0)
         focused_application = str(getattr(user_presence, "focused_application", "") or "")
+        activity_state = str(getattr(user_presence, "activity_state", "") or "")
+        is_fullscreen = bool(getattr(user_presence, "is_fullscreen", False))
+        input_events_per_minute = float(
+            getattr(user_presence, "input_events_per_minute", 0.0) or 0.0
+        )
         if idle_duration >= 300:
             return "low"
+        if activity_state in {"leisure", "idle"}:
+            return "low"
+        if activity_state in {"work", "game"}:
+            return "high"
+        if is_fullscreen or input_events_per_minute >= 30:
+            return "high"
         if focused_application and idle_duration < 30:
             return "high"
         return "normal"

@@ -7,21 +7,537 @@
 
 ---
 
+## [2026-04-17] 日常模式 v2：真实桌面感知增强与电脑能力补强
+
+**状态**：日常模式 v2 代码完成候选。已按远的要求先暂停 2 小时 Presence Murmur 常驻浸泡和飞书真实触达节奏测试，转为继续补齐代码能力；本轮完成更真实的桌面感知、Browser MCP 轻量 session、文件敏感路径保护、GUI Agent 宏闭环雏形、工具自然闭环、WebUI 可观测性和自主学习候选确认，并通过主回归与真实 LLM 回归。
+
+### 本轮实现内容
+
+- 感知层增强：
+  - `UserPresence` 新增 `foreground_process_name`、`foreground_window_class`、`is_fullscreen`、`input_events_per_minute`。
+  - `WindowsUserPresenceProvider` 改为优先用 Win32 API 读取前台窗口标题、窗口类名、进程名和全屏状态。
+  - 输入频率采用 idle 变化的近似采样，不安装全局键盘钩子，降低隐私和稳定性风险。
+  - `classify_activity_state()` 现在综合窗口标题、进程名、全屏状态、idle 和输入频率判断 work/game/leisure/idle/away/unknown。
+  - `PerceptionCoordinator` 新增事件：
+    - `activity_state_changed`
+    - `fullscreen_started`
+    - `fullscreen_ended`
+    - `high_input_activity`
+  - `PromptBuilder` 的当前感知 section 会注入前台进程、电脑使用状态、全屏状态和近似输入频率。
+  - `InitiativeEngine` / `ExpressionContextBuilder` 已把全屏和高输入频率纳入高打扰成本，降低碎碎念触发。
+
+- Browser MCP 补强：
+  - 新增轻量 browser session 工具：
+    - `browser_session_open`
+    - `browser_session_snapshot`
+    - `browser_session_click`
+    - `browser_session_type`
+    - `browser_session_fill_form`
+    - `browser_session_submit`
+  - 当前 session 支持本地/HTTP HTML 的页面文本、链接、表单字段读取，支持点击链接后更新 session，支持表单填写状态和提交预演。
+  - 真实提交、登录、上传、支付和隐私表单仍被拦截，后续必须走明确确认后再接入执行路径。
+
+- Filesystem / Document MCP 安全补强：
+  - 新增敏感路径保护，默认拦截 `.env`、私钥、证书、token、Cookie、浏览器配置、数据库等路径的读写/复制/移动/文档读取。
+  - 如远明确需要处理，可人工确认后通过 `YUNXI_ALLOW_SENSITIVE_FILES=1` 放开。
+
+- GUI Agent 补强：
+  - `gui_run_task` dry-run 输出升级为 `observe -> plan -> act -> verify -> replan` 闭环结构。
+  - `gui_save_macro` 支持 `window_title_keyword` 适用窗口条件。
+  - 宏文件新增运行统计：runs、successes、failures、last_run_at、last_failure。
+  - 新增 `gui_macro_stats` 查看宏元数据和运行统计。
+  - 新增 `gui_verify_text`，通过 UIA 观察结果做文本验证。
+  - `gui_run_macro` 非 dry-run 后会更新成功/失败统计，失败时记录最近失败原因。
+
+- 工具自然闭环补强：
+  - pending 工具在远确认并执行后，不再固定返回“按你点头处理好了”。
+  - `YunxiExecutionEngine` 会把真实工具结果交给 LLM 做最终自然表达。
+  - LLM 不可用时才使用兜底，兜底也包含真实工具结果摘要。
+  - 失败结果会自然说明并停住，不暴露堆栈、JSON、call_id 或 tool_use 内部字段。
+
+- WebUI / Tray 可观测性补强：
+  - `/api/status` 新增前台进程、activity_state、全屏状态、输入频率。
+  - 新增主动预算、Presence Murmur 计数、最近碎碎念、pending confirmation、最近工具调用、技能候选数量和候选摘要。
+  - 新增技能候选 API：
+    - `GET /api/skills/candidates`
+    - `POST /api/skills/approve`
+    - `POST /api/skills/reject`
+
+- 自主学习 v2 补强：
+  - `run_skill_learning_cycle()` 不再直接启用挖掘出的技能。
+  - 新技能先进入 `pending` 候选状态，记录 candidate reason。
+  - `try_skill()` 只检索 `approved` 技能。
+  - 新增候选技能 approve/reject 接口，避免云汐悄悄启用高风险自动化。
+
+### 新增/更新验证
+
+- `tests/unit/test_perception_coordinator.py`：
+  - 验证进程名、全屏状态、高输入频率对 activity_state 的影响。
+  - 验证 activity/fullscreen/high-input 感知事件生成。
+  - 验证输入频率近似采样。
+- `tests/unit/test_prompt_builder.py`：
+  - 验证前台进程、activity_state、全屏状态、输入频率进入 prompt。
+- `tests/unit/test_initiative_engine.py`：
+  - 验证全屏游戏和高输入频率会抑制 presence murmur。
+- `tests/integration/test_daily_mode_extended_tools_direct.py`：
+  - 验证敏感路径默认拦截。
+  - 验证 browser session 打开、快照、点击链接、表单填写和提交预演。
+  - 验证 GUI 宏窗口条件、verify_text 动作、宏统计和失败记录。
+- `tests/unit/test_execution_engine_stage4.py`：
+  - 验证工具确认后会调用 LLM 做自然最终表达。
+- `tests/integration/test_phase5_daily_mode.py`：
+  - 验证 WebUI 状态暴露感知增强字段、Presence Murmur 统计和技能候选。
+- `tests/domains/memory/test_skill_learning.py`：
+  - 验证学习周期只生成 pending 技能候选，确认前不能被 `try_skill()` 使用，reject 后也不会使用。
+
+### 已验证
+
+- `python -m pytest -q tests\unit\test_perception_coordinator.py tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py` -> 31 passed
+- `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py::test_yunxi_direct_filesystem_and_document_tools tests\integration\test_daily_mode_extended_tools_direct.py::test_yunxi_direct_browser_tools_with_local_html -m desktop_mcp` -> 2 passed（沙箱外，MCP stdio 子进程）
+- `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py::test_yunxi_direct_gui_agent_macro_tools -m desktop_mcp` -> 1 passed（沙箱外，MCP stdio 子进程）
+- `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py -m desktop_mcp` -> 4 passed（沙箱外，含低风险 Notepad GUI 验证）
+- `python -m pytest -q tests\unit\test_execution_engine_stage4.py tests\unit\test_feishu_adapter.py` -> 9 passed
+- `python -m pytest -q tests\integration\test_daily_mode_desktop_tools_direct.py -m desktop_mcp` -> 4 passed（沙箱外）
+- `python -m pytest -q tests\domains\memory\test_skill_learning.py tests\domains\memory\test_memory_skills.py tests\integration\test_phase5_daily_mode.py` -> 23 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 130 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 38 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm` -> 8 passed
+- `git diff --check` -> passed（仅有两个已改测试文件的 CRLF/LF 提示，不是空白错误）
+
+### 当前边界
+
+- 输入频率是 idle 变化近似采样，不是全局输入 hook；这是刻意的隐私/稳定性取舍。
+- Browser session 仍是轻量 HTML session，不是完整 Playwright 登录态浏览器；真实 SPA/复杂页面仍需后续 Playwright session。
+- GUI Agent 已有闭环结构、宏统计和验证工具，但还不是完整视觉规划 Agent；复杂任务仍建议拆成 observe/click/type/hotkey/verify。
+- 敏感路径保护是本地 MCP server 级防线，仍需要上层安全确认一起工作。
+
+### 下一步
+
+按远的流程进入“代码完成后”的验证阶段：
+
+1. 先提交并上传 GitHub，固定当前日常模式 v2 代码完成候选。
+2. 再做 2 小时 Presence Murmur 常驻浸泡，观察休闲/idle/离开/回来状态切换、预算、冷却、去重和日志。
+3. 再做飞书真实触达节奏测试，确认真实通道不会刷屏，且空输出/重复兜底仍只投递自然短句。
+4. 完整 Playwright 登录态浏览器和复杂视觉规划 Agent 不纳入本轮 v2 封板门槛，作为后续电脑能力增强继续推进。
+
+---
+
+## [2026-04-16] 日常模式 v2：主动陪伴 v2 Presence Murmur 前置实现
+
+**状态**：已开始主动陪伴 v2。当前完成低打扰“存在感碎碎念”触发、独立节奏约束和精确去重链路：感知层可分类用户当前电脑使用状态，主动引擎可在休闲/空闲窗口触发 `presence_murmur`，并避免在工作/游戏时刷存在感；Runtime 会保证已投递过的碎碎念不会以完全相同句子再次投递。
+
+### 本轮实现内容
+
+- `UserPresence` 新增 `activity_state`：
+  - `work`
+  - `game`
+  - `leisure`
+  - `idle`
+  - `away`
+  - `unknown`
+- 新增 `classify_activity_state()`：
+  - 根据前台应用标题、idle 时长、键盘在场状态粗分类。
+  - VS Code/Terminal/Office/设计软件归为 work。
+  - Steam/常见游戏关键词归为 game。
+  - YouTube/Bilibili/音乐/视频/浏览器等归为 leisure。
+  - idle >= 300 秒归为 idle，长时间离开归为 away。
+- `InitiativeEngine` 接入 HeartLake v2 维度：
+  - `playfulness`
+  - `vulnerability`
+  - `intimacy_warmth`
+- 新增 `presence_murmur` 主动类型：
+  - 只在 `leisure` / `idle` 且未回复计数为 0 时增加触发分。
+  - 需要 `playfulness` 或 `intimacy_warmth` 较高。
+  - `vulnerability` 较高时不触发，避免委屈状态刷屏。
+  - `work` / `game` 活跃状态降低主动分数。
+  - `presence_murmur` 不选择事件库素材，避免每次主动都像话题/新闻/任务。
+- `CompanionContinuityService` 新增碎碎念连续性状态：
+  - `recent_presence_murmurs` 保存已投递碎碎念的规范化原句，用于精确去重；当前上限为 10000 条，按每天 6 条约可覆盖多年日常使用。
+  - `presence_murmur_count` / `presence_murmur_count_date` 提供独立日预算。
+  - `last_presence_murmur_at` 提供独立冷却。
+  - 只做“完全相同句子”去重，含义相近但措辞不同允许出现。
+- Runtime 新增 `presence_murmur` 投递前去重：
+  - 如果 LLM 生成内容与已投递碎碎念完全重复，撤掉这条未投递 assistant message。
+  - 带“不能复用完全相同句子”的 system prompt 重试一次。
+  - 如果重试仍重复，则本次不发送，避免用户侧看到重复句。
+- Prompt 层新增碎碎念避重提示：
+  - continuity summary 注入最近 6 条 `recent_presence_murmurs_do_not_repeat_exactly`。
+  - `presence_murmur` expression context 明确要求不要复用最近说过的碎碎念原句。
+- Runtime 新增低频兜底：
+  - 当 LLM 返回空碎碎念，或重复后重试仍不可投递时，生成一条短句变体兜底。
+  - 兜底句也会先检查历史，保证不和已投递碎碎念完全相同。
+  - 兜底只用于“主动已触发但模型没有给出可投递内容”的异常路径，不替代 LLM 作为主生成路径。
+- `ExpressionContextBuilder` 新增 `presence_murmur` 表达模式：
+  - 1 句话。
+  - 低打扰。
+  - 可以没有实质内容。
+  - 不分享新闻、不提出任务、不要求远回复。
+
+### 新增验证
+
+- `tests/unit/test_perception_coordinator.py`：
+  - 验证前台应用和 idle 对 `activity_state` 的分类。
+- `tests/unit/test_initiative_engine.py`：
+  - 休闲状态 + 高俏皮/高亲近触发 `presence_murmur`。
+  - 工作状态抑制 `presence_murmur`。
+  - 独立碎碎念冷却期抑制 `presence_murmur`。
+  - `presence_murmur` expression context 为短句、低打扰、碎碎念。
+- `tests/unit/test_continuity_persistence.py`：
+  - 验证碎碎念精确去重、独立冷却、独立日预算和持久化。
+- `tests/unit/test_continuity.py`：
+  - 验证已投递碎碎念进入 continuity summary，供后续 prompt 避重。
+- `tests/integration/test_daily_mode_scenario_tester.py`：
+  - Runtime 级验证：YouTube/Chrome 休闲状态下触发 `presence_murmur`，system prompt 包含 `presence_murmur` 和“碎碎念”，且不包含 `life_event_material`。
+  - Runtime 级验证：第二次生成完全相同碎碎念时，自动重试并投递另一句不完全相同的短句。
+  - Runtime 级短时浸泡：模拟休闲状态连续触发，验证未回复克制、6 条独立预算、精确去重和第 7 次预算耗尽。
+  - Runtime 级兜底验证：LLM 返回空内容时仍投递不重复短句。
+- `tests/integration/test_daily_mode_full_simulation_real_llm.py`：
+  - 新增真实 LLM Presence Murmur 自然度测试，Ollama/Moonshot 各触发两条碎碎念，验证短句、不重复、不泄露内部字段、不变成任务/新闻/搜索。
+
+### 已验证
+
+- `python -m py_compile src\core\initiative\continuity.py src\core\cognition\initiative_engine\engine.py src\core\runtime.py tests\unit\test_continuity_persistence.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py` -> passed
+- `python -m pytest -q tests\unit\test_continuity_persistence.py tests\unit\test_initiative_engine.py` -> 16 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_triggers_in_leisure_state_without_event_material` -> 1 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats` -> 1 passed
+- `python -m pytest -q tests\unit\test_continuity_persistence.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats` -> 17 passed
+- `python -m pytest -q tests\unit\test_continuity.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget` -> 16 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 3 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 122 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 38 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm` -> 8 passed
+
+### 当前边界
+
+- `activity_state` 是标题关键词分类，尚未加入真实进程名、全屏检测、输入频率和游戏模式检测。
+- `presence_murmur` 已有独立日预算和独立冷却，但仍同时受主动消息总体日预算约束；后续需要通过浸泡测试决定两层预算是否拆开。
+- 已完成短时模拟浸泡；尚未做飞书真实触达节奏测试，也未做 2 小时 presence murmur 常驻浸泡。
+
+### 下一步
+
+继续主动陪伴 v2：
+
+1. 做 2 小时 presence murmur 常驻浸泡：休闲/idle/离开/回来状态切换，观察预算、冷却、去重和日志。
+2. 做飞书真实触达节奏测试：确认飞书通道下不会刷屏，且空输出/重复兜底仍只投递自然短句。
+3. 后续再补前台进程名、全屏/游戏检测和输入频率。
+
+---
+
+## [2026-04-16] 日常模式 v2：HeartLake v2 第二阶段情绪动力学落地
+
+**状态**：已完成 HeartLake v2 的轻量情绪动力学。当前心湖不再只是一次 appraisal 后固定停留，而是具备冷却抑制、自然恢复和负面情绪解除机制。
+
+### 本轮实现内容
+
+- `HeartLake` 新增内部动力学状态：
+  - `_emotion_cooldowns`
+  - `_recovery_targets`
+  - `_last_semantic_appraisal_at`
+- `HeartLake.apply_emotion_delta()` 增加：
+  - `confidence` 缩放。
+  - 同类情绪冷却期衰减，避免连续相似输入让情绪跳太硬。
+  - `cooldown_seconds` 默认 90 秒。
+- 新增 `HeartLake.apply_natural_recovery()`：
+  - 每次感知 tick 时把 `valence/arousal/security/possessiveness/attachment/trust/tenderness/playfulness/vulnerability/intimacy_warmth` 缓慢拉回基线。
+  - `vulnerability` 恢复后可解除“委屈”。
+  - `possessiveness` 恢复后可解除“吃醋”。
+- `HeartLake.update_from_perception()` 现在先执行自然恢复，再处理感知事件和想念/安全感变化。
+
+### 新增验证
+
+- 连续两次相似吃醋 appraisal，第二次 delta 会被冷却削弱。
+- `apply_natural_recovery()` 会让脆弱感、负 valence、低俏皮感向基线恢复。
+- 负面状态恢复到阈值后，`current_emotion` 可回到“平静”，并清空复合情绪标签。
+
+### 已验证
+
+- `python -m py_compile src\core\cognition\heart_lake\core.py src\core\cognition\heart_lake\updater.py tests\unit\test_heart_lake_updater.py` -> passed
+- `python -m pytest -q tests\unit\test_heart_lake_updater.py` -> 8 passed
+- `python -m pytest -q tests\unit\test_prompt_builder.py tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py -m "not real_llm and not desktop_mcp"` -> 32 passed
+- `python -m pytest -q tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 7 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 115 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm` -> 6 passed
+
+### 当前边界
+
+- 动力学仍是轻量线性恢复，不是完整情绪物理模型。
+- 恢复基线仍是固定配置，后续可以由长期关系记忆和用户偏好调整。
+- 还没有把 `playfulness`、`vulnerability`、`intimacy_warmth` 接进主动陪伴 v2 决策。
+
+### 下一步
+
+进入主动陪伴 v2 / Presence Murmur 前置实现：
+
+1. 扩展感知层的前台应用分类，区分 work/game/leisure/idle/unknown。
+2. 扩展 `InitiativeEngine`，读取 HeartLake v2 维度，增加碎碎念低打扰主动类型。
+3. 为 Presence Murmur 增加独立预算、冷却、未回复克制和真实/模拟测试。
+
+---
+
+## [2026-04-16] 日常模式 v2：HeartLake v2 第一阶段 EmotionAppraiser 落地
+
+**状态**：已开始 HeartLake v2 代码实现。第一阶段完成本地确定性的 `EmotionAppraiser`，让心湖从单点关键词规则升级为“用户话语 + 关系记忆摘要 + 当前心湖状态”的语义评估链路。
+
+### 本轮实现内容
+
+- `HeartLake` 扩展 v2 情绪维度：
+  - `valence`
+  - `arousal`
+  - `attachment`
+  - `trust`
+  - `tenderness`
+  - `playfulness`
+  - `vulnerability`
+  - `intimacy_warmth`
+  - `compound_labels`
+  - `last_appraisal_reason`
+- 新增 `HeartLake.apply_emotion_delta()`，统一应用 semantic appraisal delta，并保留边界 clamp。
+- 新增 `EmotionAppraisalResult` 与 `EmotionAppraiser`：
+  - 其他 AI/模型夸奖 -> 轻微吃醋、占有欲上升、安全感下降。
+  - 疲惫/撑不住/不想做任务 -> 担心但想陪着，温柔照顾倾向上升。
+  - 安心/被陪伴 -> 安心、信任、安全感、亲近暖意上升。
+  - 情感寄托/不是工具/放下伪装 -> 被珍视、信任、依恋、亲近暖意上升。
+  - 碎碎念/刷存在感/活泼可爱 -> 想撒娇、俏皮感和主动倾向上升。
+  - 别打扰/频繁打扰/有点烦 -> 被提醒边界，脆弱感上升，俏皮和想念下降。
+- `HeartLakeUpdater.on_user_input()` 改为调用 `EmotionAppraiser`，旧 `on_user_input(text)` 入口保持兼容。
+- `YunxiRuntime._chat_unlocked()` 在情绪评估前先取当前相关 memory summary，并传入 `HeartLakeUpdater`。
+- `PromptBuilder` 增加复合情绪线索和 v2 关系情感维度展示，要求 LLM 不暴露内部字段而是自然表达。
+- 修复一个真实链路问题：语义 appraiser 刚设置“开心”后，感知 tick 不应在同一轮因低想念值/高安全感立即覆盖为“平静”。
+
+### 新增验证
+
+- `tests/unit/test_heart_lake_updater.py` 新增：
+  - 其他 AI 触发轻微吃醋 compound label。
+  - 疲惫输入触发担心、温柔和依恋上升。
+  - 关系记忆参与安心评估，并产生“关系被记起”。
+  - 打扰边界反馈让云汐更克制。
+- `tests/unit/test_prompt_builder.py` 新增复合情绪 prompt 注入测试。
+- `tests/integration/test_daily_mode_scenario_tester.py` 新增 Runtime 级验证：注入“云汐是情感寄托”关系记忆后，用户说“你陪着我会让我安心”，HeartLake 产生“关系被记起”，且该复合情绪进入 prompt。
+
+### 已验证
+
+- `python -m py_compile src\core\cognition\heart_lake\core.py src\core\cognition\heart_lake\updater.py src\core\runtime.py src\core\prompt_builder.py tests\unit\test_heart_lake_updater.py tests\unit\test_prompt_builder.py` -> passed
+- `python -m pytest -q tests\unit\test_heart_lake_updater.py tests\unit\test_prompt_builder.py` -> 15 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py::test_heart_lake_v2_uses_memory_summary_for_appraisal` -> 1 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 112 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 34 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm` -> 6 passed
+
+### 当前边界
+
+- `EmotionAppraiser` 仍是本地确定性规则版，尚未加入 LLM semantic appraisal。
+- 情绪动力学还只是 clamp + 局部衰减，尚未实现完整惯性、半衰期、恢复目标和误触发冷却。
+- HeartLake v2 尚未与主动陪伴 v2 的 Presence Murmur 策略深度联动。
+
+### 下一步
+
+继续 HeartLake v2 第二阶段：
+
+1. 增加情绪惯性、恢复目标、半衰期和冷却，避免情绪过快跳变。
+2. 将 `EmotionAppraiser` 拆到独立模块，并补更多 OCC-style appraisal 场景。
+3. 让 `InitiativeEngine` 读取 `playfulness`、`vulnerability`、`intimacy_warmth` 等维度，为 Presence Murmur 做准备。
+
+---
+
+## [2026-04-16] 日常模式 v2：记忆系统 v2 真实 LLM 重启召回通过
+
+**状态**：已补齐记忆 v2 的真实 LLM 自然召回验证。当前可以证明：typed memory 与会话摘要不仅能跨 Runtime 重启进入 prompt，Ollama 和 Moonshot 也能在真实回复中自然使用这些长期记忆。
+
+### 本轮实现内容
+
+- 新增 `tests/integration/test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_memory_v2_restart_recall_is_natural`：
+  - 第一轮 Runtime 用真实 LLM 连续聊天，写入主动陪伴偏好、关系记忆、工作忙时克制打扰、日常模式 v2 打磨等线索。
+  - 关闭 Runtime。
+  - 第二轮 Runtime 使用同一 memory 目录重建。
+  - 询问云汐“还记得我希望你以后怎么主动陪我吗？”
+  - 验证 system prompt 中包含会话摘要、互动风格、关系记忆、碎碎念、情感寄托。
+  - 验证真实 LLM 回复不是任务清单，而是自然提到碎碎念/存在感/克制不打扰/陪伴/安心等记忆线索。
+
+### 已验证
+
+- `python -m py_compile tests\integration\test_daily_mode_full_simulation_real_llm.py` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_memory_v2_restart_recall_is_natural -m real_llm -k ollama` -> 1 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_memory_v2_restart_recall_is_natural -m real_llm -k moonshot` -> 1 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm` -> 6 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\domains\memory\test_relationship_memory.py` -> 18 passed
+
+### 当前判断
+
+记忆系统 v2 的本地核心链路已达到“可进入下一阶段”的门槛：
+
+- typed memory 写入、持久化、纠错、遗忘、导出已通过单元测试。
+- 会话摘要压缩和 prompt 预算编译已通过结构测试。
+- Runtime 重启后 prompt 注入已通过 mock LLM 捕获测试。
+- Ollama 与 Moonshot 真实模型的重启召回和自然表达已通过。
+
+下一步可以开始 HeartLake v2 的 `EmotionAppraiser` 最小核心实现；同时可把 `PromptMemoryCompiler` / `DailyMemorySummarizer` 后续拆到独立模块，但这不是进入 HeartLake v2 的阻塞项。
+
+---
+
+## [2026-04-16] 日常模式 v2：记忆系统 v2 第三阶段重启恢复链路验证
+
+**状态**：已补齐记忆 v2 的 Runtime 级重启恢复结构验证。当前可以证明：日常对话写入 typed memory 和会话摘要后，重建 Runtime 仍能把这些长期记忆注入下一轮 system prompt。
+
+### 本轮实现内容
+
+- 新增 `tests/integration/test_daily_mode_scenario_tester.py::test_memory_v2_survives_runtime_restart_and_reaches_prompt`：
+  - 第一轮 Runtime 连续聊天，触发 typed memory 和会话摘要写入。
+  - 关闭第一轮 Runtime。
+  - 使用同一个 memory 目录重建第二轮 Runtime。
+  - 第二轮聊天时检查 system prompt 中包含：
+    - `会话摘要`
+    - `互动风格`
+    - `关系记忆`
+    - `碎碎念`
+    - `情感寄托`
+    - 工作忙/频繁打扰相关边界线索
+- 这证明记忆 v2 已跨过“只在 MemoryManager 单元测试里可用”的阶段，进入 Runtime prompt 链路。
+
+### 已验证
+
+- `python -m py_compile tests\integration\test_daily_mode_scenario_tester.py src\domains\memory\manager.py` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py::test_memory_v2_survives_runtime_restart_and_reaches_prompt` -> 1 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\domains\memory\test_relationship_memory.py` -> 18 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 108 passed
+- `python -m pytest -q tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 24 passed
+
+### 当前边界
+
+- 这轮验证使用 mock LLM 捕获 system prompt，不验证真实模型是否自然使用这些记忆。
+- 下一步可以补真实 LLM 召回测试，或先拆分 `PromptMemoryCompiler` / `DailyMemorySummarizer` 到独立模块，降低 `manager.py` 复杂度。
+
+---
+
+## [2026-04-16] 日常模式 v2：记忆系统 v2 第二阶段摘要压缩与 prompt 预算编译
+
+**状态**：已完成记忆系统 v2 第二阶段的本地确定性实现。当前记忆链路从“单轮 typed memory 抽取”推进到“多轮会话缓冲、会话级摘要压缩、prompt 预算编译”。
+
+### 本轮实现内容
+
+- 新增会话级压缩结构：
+  - `ConversationTurn`
+  - `DailyMemorySummarizer`
+  - `PromptMemoryCompiler`
+- `MemoryManager` 新增 `_conversation_turn_buffer`，每轮 `capture_relationship_memory()` 后写入缓冲。
+- 达到阈值后自动调用 `flush_conversation_summary()`，把多轮对话压缩为 typed memory：
+  - `summary`
+  - `emotion_summary`
+  - `relationship`
+  - `interaction_style`
+- `relationship_memory.json` 新增 `conversation_turn_buffer` 持久化字段，避免进程重启时未压缩短会话直接丢失。
+- `get_memory_summary()` 改为通过 `PromptMemoryCompiler` 编译旧三类记忆与 typed memory：
+  - 保留旧格式偏好/经历/承诺。
+  - typed memory 按 importance、confidence、query 相关性和类型优先级排序。
+  - 边界、承诺、关系、情绪反馈等高优先级记忆优先进入 prompt。
+  - 旧三类记忆已经出现时，不重复输出其 mirrored typed memory。
+
+### 当前边界
+
+- `DailyMemorySummarizer` 仍是本地确定性摘要器，不是 LLM 语义总结。
+- `PromptMemoryCompiler` 已从 `get_memory_summary()` 中抽出，但仍在 `MemoryManager` 文件内，后续可再拆到独立模块。
+- 尚未做真实 LLM 记忆自然召回测试。
+- 尚未实现每日定时总结、跨日情绪摘要和长期摘要合并策略。
+
+### 已验证
+
+- `python -m py_compile src\domains\memory\manager.py tests\domains\memory\test_relationship_memory.py` -> passed
+- `python -m pytest -q tests\domains\memory\test_relationship_memory.py` -> 9 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 108 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 32 passed
+
+### 下一步
+
+进入记忆系统 v2 第三阶段：
+
+1. 增加 Runtime 级重启恢复场景：对话写入 typed memory 和会话摘要后，重建 Runtime 并验证 prompt 注入。
+2. 增加真实 LLM 召回测试：要求云汐自然引用重要关系记忆，而不是机械复述。
+3. 将 `PromptMemoryCompiler` 和 summarizer 拆到独立模块，降低 `manager.py` 复杂度。
+4. 完成记忆 v2 本地链路后，开始 HeartLake v2 的 `EmotionAppraiser`。
+
+---
+
+## [2026-04-16] 日常模式 v2 开始实现：记忆系统 v2 第一阶段核心落地
+
+**状态**：已开始按日常模式 v2 路线实现。第一阶段优先落地记忆系统 v2 的最小可运行核心，为后续 HeartLake v2、主动陪伴 v2 和工具自然闭环提供基础。
+
+### 本轮实现内容
+
+- `MemoryManager` 增加 typed memory 基础模型：
+  - `MemoryItem`
+  - `MemoryCandidate`
+  - `DailyMemoryAppraiser`
+- 保留现有 `preferences`、`episodes`、`promises` 三类旧接口，新增 typed memory 持久化字段 `memory_items`，并自动把旧记忆镜像为 typed memory，保证旧测试和旧 prompt 不断。
+- 新增 typed memory 类型的首批本地规则评估：
+  - `preference`
+  - `promise`
+  - `episode`
+  - `boundary`
+  - `emotion_feedback`
+  - `relationship`
+  - `interaction_style`
+  - `self_memory`
+  - `fact`
+- 新增记忆纠错与遗忘基础能力：
+  - `correct_memory()`
+  - `forget_memory()`
+  - `get_typed_memories()`
+  - `export_memory_markdown()`
+- `get_memory_summary()` 开始按 query、importance、confidence 和类型优先级编译 typed memory 摘要；旧三类记忆仍按原格式进入 prompt。
+- `YunxiRuntime.get_context()` 现在把当前 `user_input` 传给 memory summary，用于相关记忆排序。
+
+### 当前边界
+
+- 本轮是本地确定性规则版 `DailyMemoryAppraiser`，尚未接入 LLM 语义评估。
+- 尚未实现后台 `DailyMemorySummarizer`、长对话摘要压缩和每日情绪摘要。
+- 尚未实现 Graphiti/Zep 式 temporal graph，只保留 `supersedes`、`valid_from`、`valid_to` 等迁移字段。
+- HeartLake v2 尚未开始代码实现。
+
+### 已验证
+
+- `python -m py_compile src\domains\memory\manager.py src\core\runtime.py tests\domains\memory\test_relationship_memory.py` -> passed
+- `python -m pytest -q tests\domains\memory\test_relationship_memory.py` -> 7 passed
+- `python -m pytest -q tests\domains\memory tests\unit\test_prompt_builder.py tests\integration\test_phase5_daily_mode.py -m "not real_llm and not desktop_mcp"` -> 44 passed
+- `python -m pytest -q tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 7 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 106 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py -m "not real_llm and not desktop_mcp"` -> 25 passed
+
+### 下一步
+
+继续记忆系统 v2 第二阶段：
+
+1. 增加 `DailyMemorySummarizer` 和会话级摘要压缩。
+2. 增加更明确的 `PromptMemoryCompiler`，把 prompt 预算从 `MemoryManager.get_memory_summary()` 中拆出来。
+3. 补充 Runtime 级场景测试：对话写入 -> 重启恢复 -> prompt 注入 -> 真实 LLM 自然召回。
+4. 记忆 v2 稳定后，再进入 HeartLake v2 的 `EmotionAppraiser` 实现。
+
+---
+
 ## [2026-04-16] 日常模式 v2 打磨路线：记忆、心湖、主动陪伴与电脑能力完整体
 
 **状态**：已将日常模式 v1 之后的核心优化收束为 v2 路线。短期仍不进入工厂模式，优先把日常模式继续打磨到更强的长期陪伴状态。
 
 ### 核心判断
 
-- 记忆系统 v2 和 HeartLake v2 可以实现，但必须按工程阶段拆解，不能一次性追求抽象意义上的“完美”。
-- “顶级记忆系统”的工程含义是：重要事实、情绪反馈、承诺、共同经历、互动风格、边界、自我成长和技能经验都能稳定写入、检索、修正、压缩、重启恢复，并真实影响云汐的回复和主动行为。
-- “心湖系统 v2”的工程含义是：情绪不再主要靠关键词触发，而是由用户话语、关系记忆、最近上下文和当前感知共同评估；HeartLake 负责情绪惯性、恢复、边界和复合情绪状态。
+- 记忆系统 v2 和 HeartLake v2 不应凭空造楼，采用“借鉴成熟公开架构，在 yunxi3.0 内轻量重写”的路线。
+- 记忆系统参考 MIRIX、LangMem、Letta/MemGPT、Graphiti/Zep、MemOS、LlamaIndex Memory：
+  - MIRIX 提供 core/episodic/semantic/procedural/resource/knowledge 分层思路。
+  - LangMem 提供 semantic/episodic/procedural 记忆形成和 delayed processing 思路。
+  - Letta/MemGPT 提供 core memory + archival/recall memory + Agent 自管理记忆思路。
+  - Graphiti/Zep 后续作为 temporal graph 方向，用于事实随时间变化和关系图。
+  - MemOS 提供可编辑、可删除、可纠错、工具记忆和异步调度思路。
+- HeartLake v2 参考 FAtiMA、OCC、Generative Agents、Concordia：
+  - FAtiMA 提供 appraisal -> affect -> decision 架构。
+  - OCC 提供事件/行动者/对象的语义情绪评估思路。
+  - Generative Agents 提供观察、记忆、反思、计划闭环。
+  - Concordia 的价值主要用于构造关系场景测试。
+- 第一阶段不引入重基础设施，默认本地 JSON/SQLite + BM25/embedding 混合检索；Neo4j/Redis/多 Agent 记忆服务后移。
 - 高级核心系统必须配套测试方法，否则容易做成一堆漂亮字段但不真正影响云汐。
 
 ### v2 优先级
 
-1. 记忆系统 v2：typed memory、MemoryAppraiser、DailyMemorySummarizer、上下文压缩、用户纠错、Markdown 导出、重启召回。
-2. HeartLake v2：EmotionAppraiser、复合情绪维度、情绪惯性、恢复速度、误触发抑制、情绪轨迹沉淀。
+1. 记忆系统 v2：CoreMemoryBlock、typed memory、DailyMemoryAppraiser、DailyMemorySummarizer、PromptMemoryCompiler、上下文压缩、用户纠错、Markdown 导出、重启召回。
+2. HeartLake v2：EmotionAppraiser、OCC-style appraisal、复合情绪维度、情绪惯性、恢复速度、误触发抑制、情绪轨迹沉淀。
 3. 主动陪伴 v2：Presence Murmur 存在感碎碎念、前台进程分类、打扰成本、独立预算、未回复克制。
 4. 工具自然闭环：工具结果回 LLM 做最终表达，失败按权限/路径/网页/GUI/网络/取消确认分层表达，成功链路进入技能候选。
 5. Browser 完整体：在轻量 Browser MCP 之外新增 Playwright Session，覆盖 DOM、截图、点击、输入、等待、下载和安全确认。
@@ -42,6 +558,9 @@
 ### 文档更新
 
 - `docs/daily_mode_optimization_review.md` 已扩展为日常模式 v2 详细路线，包含记忆 v2、HeartLake v2、Presence Murmur、Browser/GUI 完整体、文档能力、自主学习、可观测性和统一测试方法。
+- `docs/design/MEMORY_INTEGRATION_DESIGN.md` 已从“记忆接入修复/终身学习版”升级为“人格级长期记忆 + 终身学习版”，明确 MIRIX/LangMem/Letta/Graphiti/MemOS/LlamaIndex 的借鉴与取舍，并定义云汐 typed memory、core memory、记忆纠错、prompt 预算和验收标准。
+- `docs/design/HEART_LAKE_DESIGN.md` 已从规则式女友感设计升级为“语义心湖 v2”，明确 FAtiMA/OCC/Generative Agents/Concordia 的借鉴与取舍，并定义 EmotionAppraiser、复合情绪、情绪动力学、主动性/记忆联动和验收标准。
+- 本轮仅更新本地文档，不提交、不推送 GitHub；等待后续实现和验证完成后统一提交。
 
 ---
 

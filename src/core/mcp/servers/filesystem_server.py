@@ -10,7 +10,7 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 from xml.etree import ElementTree
 
 from mcp.server.fastmcp import FastMCP
@@ -52,6 +52,50 @@ def _resolve_user_path(path: str) -> Path:
     raise PermissionError(f"路径不在允许根目录内：{resolved}；允许根目录：{roots_text}")
 
 
+def _is_sensitive_path(path: Path) -> bool:
+    lowered_parts = [part.lower() for part in path.parts]
+    name = path.name.lower()
+    sensitive_names = {
+        ".env",
+        ".env.local",
+        ".env.production",
+        "id_rsa",
+        "id_ed25519",
+        "credentials.json",
+        "token.json",
+        "cookies.sqlite",
+        "login data",
+        "history",
+    }
+    sensitive_suffixes = {".pem", ".key", ".p12", ".pfx", ".sqlite", ".db"}
+    sensitive_dirs = {
+        ".ssh",
+        ".gnupg",
+        "cookies",
+        "local storage",
+        "session storage",
+        "user data",
+        "browser",
+    }
+    return (
+        name in sensitive_names
+        or path.suffix.lower() in sensitive_suffixes
+        or any(part in sensitive_dirs for part in lowered_parts)
+    )
+
+
+def _sensitive_path_guard(path: Path, operation: str) -> Optional[str]:
+    if os.getenv("YUNXI_ALLOW_SENSITIVE_FILES") == "1":
+        return None
+    if not _is_sensitive_path(path):
+        return None
+    return (
+        f"[{operation}已拦截：{path} 看起来包含密钥、令牌、Cookie、浏览器配置"
+        "或数据库等敏感数据。若远明确需要处理，请先人工确认并设置 "
+        "YUNXI_ALLOW_SENSITIVE_FILES=1。]"
+    )
+
+
 def _read_text(path: Path, max_chars: int) -> str:
     text = path.read_text(encoding="utf-8", errors="replace")
     return text[: max(200, max_chars)]
@@ -81,6 +125,9 @@ def file_read(path: str, max_chars: int = 8000) -> str:
         resolved = _resolve_user_path(path)
         if not resolved.is_file():
             return f"[读取失败：不是文件：{resolved}]"
+        blocked = _sensitive_path_guard(resolved, "读取")
+        if blocked:
+            return blocked
         return _read_text(resolved, max_chars)
     except Exception as exc:
         return f"[读取失败：{exc}]"
@@ -91,6 +138,9 @@ def file_write(path: str, content: str, overwrite: bool = False) -> str:
     """Write a UTF-8 text file. Existing files require overwrite=true."""
     try:
         resolved = _resolve_user_path(path)
+        blocked = _sensitive_path_guard(resolved, "写入")
+        if blocked:
+            return blocked
         if resolved.exists() and not overwrite:
             return f"[写入失败：文件已存在，如需覆盖请设置 overwrite=true：{resolved}]"
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +155,9 @@ def file_append(path: str, content: str) -> str:
     """Append UTF-8 text to a file."""
     try:
         resolved = _resolve_user_path(path)
+        blocked = _sensitive_path_guard(resolved, "追加")
+        if blocked:
+            return blocked
         resolved.parent.mkdir(parents=True, exist_ok=True)
         with resolved.open("a", encoding="utf-8") as file:
             file.write(content)
@@ -119,6 +172,9 @@ def file_copy(source_path: str, target_path: str, overwrite: bool = False) -> st
     try:
         source = _resolve_user_path(source_path)
         target = _resolve_user_path(target_path)
+        blocked = _sensitive_path_guard(source, "复制") or _sensitive_path_guard(target, "复制")
+        if blocked:
+            return blocked
         if not source.is_file():
             return f"[复制失败：源文件不存在：{source}]"
         if target.exists() and not overwrite:
@@ -136,6 +192,9 @@ def file_move(source_path: str, target_path: str, overwrite: bool = False) -> st
     try:
         source = _resolve_user_path(source_path)
         target = _resolve_user_path(target_path)
+        blocked = _sensitive_path_guard(source, "移动") or _sensitive_path_guard(target, "移动")
+        if blocked:
+            return blocked
         if not source.exists():
             return f"[移动失败：源路径不存在：{source}]"
         if target.exists() and not overwrite:
@@ -195,6 +254,9 @@ def document_read(path: str, max_chars: int = 12000) -> str:
         resolved = _resolve_user_path(path)
         if not resolved.is_file():
             return f"[文档读取失败：不是文件：{resolved}]"
+        blocked = _sensitive_path_guard(resolved, "文档读取")
+        if blocked:
+            return blocked
         suffix = resolved.suffix.lower()
         if suffix in {".txt", ".md", ".markdown", ".json", ".csv", ".py", ".yaml", ".yml", ".log"}:
             return _read_text(resolved, max_chars)

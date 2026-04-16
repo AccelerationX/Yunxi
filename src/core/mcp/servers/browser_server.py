@@ -9,6 +9,7 @@ later.
 from __future__ import annotations
 
 import html
+import json
 import re
 import urllib.parse
 import urllib.request
@@ -21,6 +22,14 @@ from mcp.server.fastmcp import FastMCP
 
 
 mcp = FastMCP("yunxi-browser")
+_SESSION: dict[str, object] = {
+    "url": "",
+    "raw": "",
+    "text": "",
+    "links": [],
+    "forms": [],
+    "fields": {},
+}
 
 
 class _ReadableHTMLParser(HTMLParser):
@@ -29,6 +38,8 @@ class _ReadableHTMLParser(HTMLParser):
         self._skip_stack: list[str] = []
         self.text_parts: list[str] = []
         self.links: list[tuple[str, str]] = []
+        self.forms: list[dict[str, object]] = []
+        self._current_form: Optional[dict[str, object]] = None
         self._current_link: Optional[str] = None
         self._current_link_text: list[str] = []
 
@@ -41,6 +52,24 @@ class _ReadableHTMLParser(HTMLParser):
             attrs_dict = dict(attrs)
             self._current_link = attrs_dict.get("href")
             self._current_link_text = []
+        if tag == "form":
+            attrs_dict = dict(attrs)
+            self._current_form = {
+                "action": attrs_dict.get("action", ""),
+                "method": attrs_dict.get("method", "get"),
+                "fields": [],
+            }
+        if tag in {"input", "textarea", "select"} and self._current_form is not None:
+            attrs_dict = dict(attrs)
+            field = {
+                "tag": tag,
+                "name": attrs_dict.get("name", ""),
+                "id": attrs_dict.get("id", ""),
+                "type": attrs_dict.get("type", "text"),
+                "value": attrs_dict.get("value", ""),
+                "placeholder": attrs_dict.get("placeholder", ""),
+            }
+            self._current_form["fields"].append(field)
         if tag in {"p", "div", "section", "article", "br", "li", "tr", "h1", "h2", "h3"}:
             self.text_parts.append("\n")
 
@@ -54,6 +83,9 @@ class _ReadableHTMLParser(HTMLParser):
             self.links.append((label, self._current_link))
             self._current_link = None
             self._current_link_text = []
+        if tag == "form" and self._current_form is not None:
+            self.forms.append(self._current_form)
+            self._current_form = None
 
     def handle_data(self, data: str) -> None:
         if self._skip_stack:
@@ -185,6 +217,118 @@ def browser_type(text: str) -> str:
     if _send_keys_with_powershell(text):
         return "已向当前焦点输入文本"
     return "[浏览器输入失败：Windows SendKeys 启动失败]"
+
+
+@mcp.tool()
+def browser_session_open(url: str) -> str:
+    """Open a lightweight browser session by reading a local or HTTP(S) page."""
+    try:
+        raw, normalized = _read_url(url)
+    except Exception as exc:
+        return f"[浏览器会话打开失败：{exc}]"
+    parser = _ReadableHTMLParser()
+    parser.feed(raw)
+    _SESSION.update(
+        {
+            "url": normalized,
+            "raw": raw,
+            "text": parser.readable_text(),
+            "links": [(label, urllib.parse.urljoin(normalized, href)) for label, href in parser.links],
+            "forms": parser.forms,
+            "fields": {},
+        }
+    )
+    return _session_summary(max_chars=1200)
+
+
+@mcp.tool()
+def browser_session_snapshot(max_chars: int = 4000) -> str:
+    """Return the current lightweight browser-session URL, text, links, and forms."""
+    if not _SESSION.get("url"):
+        return "[浏览器会话为空：请先调用 browser_session_open]"
+    return _session_summary(max_chars=max_chars)
+
+
+@mcp.tool()
+def browser_session_click(link_text: str) -> str:
+    """Follow a link in the current lightweight browser session by visible text."""
+    if not _SESSION.get("url"):
+        return "[浏览器会话点击失败：请先调用 browser_session_open]"
+    needle = (link_text or "").lower()
+    links = list(_SESSION.get("links", []))
+    for label, href in links:
+        if needle in str(label).lower() or needle in str(href).lower():
+            return browser_session_open(str(href))
+    return f"[浏览器会话点击失败：未找到包含 '{link_text}' 的链接]"
+
+
+@mcp.tool()
+def browser_session_type(field_name: str, text: str) -> str:
+    """Set a form-field value in the current lightweight browser session."""
+    if not _SESSION.get("url"):
+        return "[浏览器会话输入失败：请先调用 browser_session_open]"
+    fields = dict(_SESSION.get("fields", {}))
+    fields[field_name] = text
+    _SESSION["fields"] = fields
+    return f"浏览器会话字段已填写：{field_name}"
+
+
+@mcp.tool()
+def browser_session_fill_form(fields_json: str) -> str:
+    """Set multiple form-field values from a JSON object in the current session."""
+    if not _SESSION.get("url"):
+        return "[浏览器会话填表失败：请先调用 browser_session_open]"
+    try:
+        values = json.loads(fields_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"[浏览器会话填表失败：fields_json 不是有效 JSON：{exc}]"
+    if not isinstance(values, dict):
+        return "[浏览器会话填表失败：fields_json 必须是 JSON object]"
+    fields = dict(_SESSION.get("fields", {}))
+    fields.update({str(key): str(value) for key, value in values.items()})
+    _SESSION["fields"] = fields
+    return "浏览器会话字段已填写：\n" + json.dumps(fields, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def browser_session_submit(dry_run: bool = True) -> str:
+    """Preview submitting the current lightweight session form."""
+    if not _SESSION.get("url"):
+        return "[浏览器会话提交失败：请先调用 browser_session_open]"
+    fields = dict(_SESSION.get("fields", {}))
+    forms = list(_SESSION.get("forms", []))
+    if dry_run:
+        return (
+            "浏览器会话提交预演：\n"
+            f"- url: {_SESSION.get('url')}\n"
+            f"- forms: {json.dumps(forms[:3], ensure_ascii=False)}\n"
+            f"- fields: {json.dumps(fields, ensure_ascii=False)}\n"
+            "- 当前未执行真实提交"
+        )
+    return "[浏览器会话提交已拦截：真实提交、登录、上传、支付或隐私表单必须由远明确确认后再接入执行路径]"
+
+
+def _session_summary(max_chars: int = 4000) -> str:
+    url = str(_SESSION.get("url", ""))
+    text = str(_SESSION.get("text", ""))
+    links = list(_SESSION.get("links", []))
+    forms = list(_SESSION.get("forms", []))
+    fields = dict(_SESSION.get("fields", {}))
+    rows = [f"会话 URL：{url}"]
+    if text:
+        rows.append("页面文本：")
+        rows.append(text[: max(200, max_chars)])
+    if links:
+        rows.append("链接：")
+        for label, href in links[:20]:
+            rows.append(f"- {label or href}: {href}")
+    if forms:
+        rows.append("表单：")
+        rows.append(json.dumps(forms[:5], ensure_ascii=False, indent=2))
+    if fields:
+        rows.append("已填写字段：")
+        rows.append(json.dumps(fields, ensure_ascii=False, indent=2))
+    return "\n".join(rows)
 
 
 def _send_keys_with_powershell(text: str) -> bool:

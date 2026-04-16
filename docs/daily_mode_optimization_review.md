@@ -1,12 +1,12 @@
 # 日常模式后续优化审查
 
-最后更新：2026-04-16
+最后更新：2026-04-17
 
 ## 结论
 
-日常模式 v1 已经可以作为稳定基线继续使用，但还没有达到“长期陪伴体验最好”的状态。下一阶段仍不建议进入工厂模式，优先把日常模式继续打磨到 v2：让云汐更像一个长期住在电脑里的亲密伴侣，而不是一个会聊天、会调工具的脚本入口。
+日常模式 v2 已进入代码完成候选：人格级记忆、HeartLake 语义情绪、Presence Murmur 主动陪伴、真实桌面感知、工具自然闭环、文档/浏览器/GUI 基础能力、自主学习候选确认和 WebUI 可观测性都已经落到运行链路和测试中。
 
-后续优化的核心顺序是：先补“人格级记忆”和“心湖语义情绪”，再补“自然主动陪伴”，之后把 Browser、GUI Agent、文档工具和自主学习推向完整体，最后用多日浸泡和可观测性证明系统能长期常驻。
+下一步不进入工厂模式，先按远的流程固定代码并做 2 小时 Presence Murmur 常驻浸泡与飞书真实触达节奏测试。完整 Playwright 登录态浏览器、复杂视觉规划 Agent、过夜/多日浸泡属于 v2 后续增强，不阻塞当前日常模式 v2 的代码完成候选。
 
 ## 可实现性判断
 
@@ -21,6 +21,14 @@
 - 能通过可重复测试证明：写入、召回、重启恢复、冲突修正、遗忘压缩、真实 LLM 表达都正常。
 
 最大风险不是“实现不了”，而是如果没有测试闭环，很容易做成一堆漂亮字段但不真正影响云汐。因此每个 v2 子系统都必须同时交付：数据结构、运行链路、prompt 注入、行为测试、重启测试、真实 LLM 场景测试。
+
+## 架构借鉴基准
+
+日常模式 v2 不凭空造楼，采用“参考成熟公开架构，在 yunxi3.0 内轻量重写”的原则：
+
+- 记忆系统参考 MIRIX、LangMem、Letta/MemGPT、Graphiti/Zep、MemOS、LlamaIndex Memory。第一阶段借鉴分层、延迟处理、core memory、可纠错和 prompt 预算思想；暂不引入 Neo4j/Redis/多 Agent 记忆服务。
+- 心湖系统参考 FAtiMA、OCC、Generative Agents、Concordia。第一阶段借鉴 appraisal -> affect -> decision、OCC-style 语义评估、观察/记忆/反思/计划和场景模拟测试；不照搬完整社会模拟框架。
+- 具体落地以 `docs/design/MEMORY_INTEGRATION_DESIGN.md` 和 `docs/design/HEART_LAKE_DESIGN.md` 的 v2 设计为准。
 
 ## P0：日常模式 v2 核心
 
@@ -95,6 +103,7 @@
 
 - `InitiativeEngine` 已有冷却、预算、未回复克制和打扰成本。
 - 主动消息仍偏“事件触发/话题触发”，缺少活泼女孩式的存在感。
+- 2026-04-17 更新：前台进程名、窗口类名、全屏状态、近似输入频率已进入 `UserPresence`；主动引擎已把全屏/高输入/游戏状态纳入高打扰成本。
 
 目标：
 
@@ -125,6 +134,7 @@
 
 - pending confirmation 已稳定。
 - 工具执行后当前回复多是固定话术，例如“已经按你点头的那一步处理好了”。
+- 2026-04-17 更新：确认后的工具结果已回到 LLM 做最终自然表达；LLM 不可用时使用带真实结果摘要的兜底，不再固定输出“按你点头处理好了”。
 
 目标：
 
@@ -147,6 +157,7 @@
 
 - Browser MCP 当前是轻量 URL/HTML 读取和链接打开。
 - 对登录态页面、SPA、表单、多步网页操作能力有限。
+- 2026-04-17 更新：已新增轻量 browser session，可对本地/HTTP HTML 做 session open、snapshot、link click、form fill 和 submit dry-run；复杂登录态和 SPA 仍待 Playwright session。
 
 目标：
 
@@ -167,6 +178,7 @@
 
 - GUI Agent 有观察、点击、输入、热键、宏。
 - 还没有完整闭环和失败恢复。
+- 2026-04-17 更新：已补 `observe -> plan -> act -> verify -> replan` dry-run 结构、宏窗口适用条件、运行统计、失败原因记录和 `gui_verify_text`；复杂视觉规划仍待后续。
 
 目标：
 
@@ -188,6 +200,7 @@
 
 - Filesystem/Document MCP 支持常见读写、glob、grep、document_read。
 - 安全边界仍偏粗，文档格式覆盖还可以扩展。
+- 2026-04-17 更新：已新增敏感路径默认拦截，覆盖 `.env`、私钥、证书、token、Cookie、浏览器配置和数据库等路径；必要时通过人工确认后设置环境变量放开。
 
 目标：
 
@@ -210,6 +223,7 @@
 
 - ExperienceBuffer、SkillLibrary、FailureReplay 已接入。
 - 真实多日技能沉淀和复用还未充分验证。
+- 2026-04-17 更新：学习周期已改为生成 pending 技能候选，WebUI/API 可查看、批准或拒绝；`try_skill()` 只使用 approved 技能，避免高风险技能悄悄启用。
 
 目标：
 
@@ -248,6 +262,7 @@
 现状：
 
 - WebUI/Tray 定位正确，但状态还偏基础。
+- 2026-04-17 更新：状态 API 已增加前台进程、activity_state、全屏、输入频率、主动预算、Presence Murmur 统计、最近工具调用和技能候选；新增技能候选 approve/reject API。
 
 目标：
 
@@ -263,15 +278,11 @@
 
 ## 推荐下一阶段顺序
 
-1. 记忆系统 v2：typed memory、memory appraiser、summary/context compression、重启召回测试。
-2. HeartLake v2：emotion appraiser、复合情绪维度、情绪惯性和真实 LLM 行为测试。
-3. 主动陪伴 v2：Presence Murmur、前台进程分类、打扰成本、未回复克制和主动节奏测试。
-4. 工具自然闭环：工具结果回 LLM、失败分层、技能候选沉淀。
-5. Browser MCP 完整体：Playwright Session 与安全确认。
-6. GUI Agent 完整体：observe-plan-act-verify-replan、视觉/UIA 双断言、宏复用。
-7. 文档与文件能力完整体：格式矩阵、安全边界、真实整理任务。
-8. 自主学习 v2：技能候选、用户确认、失败降级。
-9. runtime metrics、WebUI 可观测性、2 小时/过夜/多日浸泡。
+1. 上传当前日常模式 v2 代码完成候选到 GitHub，固定可回滚基线。
+2. 2 小时 Presence Murmur 常驻浸泡：休闲/idle/离开/回来状态切换、预算、冷却、去重、日志与资源占用。
+3. 飞书真实触达节奏测试：真实通道下主动消息不刷屏，空输出/重复兜底仍是自然短句。
+4. 浸泡后修复发现的问题，再决定是否标记“日常模式 v2 封板”。
+5. v2 后续增强：Playwright 登录态浏览器、复杂视觉规划 Agent、过夜/多日浸泡、runtime metrics 深化。
 
 ## 高级核心系统统一测试方法
 

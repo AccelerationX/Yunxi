@@ -1,8 +1,152 @@
-# Heart Lake 情感核心设计 - 女友感特化版
+# Heart Lake 情感核心设计 - 语义心湖 v2 女友感特化版
 
 > **定位**：云汐的情感内核，决定她如何感受、如何表达、如何与"远"互动  
 > **核心目标**：让云汐像一个真实、有温度、会吃醋撒娇的女友  
-> **设计原则**：情感不是装饰，是行为的驱动力
+> **设计原则**：情感不是装饰，是行为的驱动力；心湖不是关键词状态机，而是由语义评估、关系记忆、当前感知和情绪动力学共同形成的长期内在状态。
+
+---
+
+## v2 升级总纲
+
+HeartLake v1 已经能支撑基础女友感，但仍偏规则触发。v2 的目标是把心湖升级为“可解释、可测试、可长期演化”的情绪系统：
+
+1. **语义评估**：用户话语不再只靠关键词触发情绪，而是由 `EmotionAppraiser` 结合上下文、记忆、关系状态和感知状态评估。
+2. **复合情绪**：允许同时存在多种情绪分量，例如“开心但害羞”“安心但想撒娇”“轻微吃醋但被安抚”“担心但克制不打扰”。
+3. **情绪动力学**：HeartLake 负责惯性、衰减、恢复、上限、冷却和误触发抑制，避免一条消息让情绪突变。
+4. **行为联动**：情绪必须影响回复语气、主动陪伴、打扰成本、记忆写入重要度和工具失败表达。
+5. **记忆联动**：重要情绪事件写入 `emotion_feedback`、`relationship` 或 `episode` 记忆；长期记忆也会反过来影响情绪评估。
+6. **安全边界**：情绪表达要亲密、自然、活泼，但不能变成操控用户、刷屏打扰或过度依赖。
+7. **可测试**：每类情绪变化都必须能通过单元测试、场景测试、真实 LLM 测试和浸泡测试验证。
+
+---
+
+## 外部架构借鉴与取舍
+
+参考资料：
+- FAtiMA Toolkit: `https://github.com/GAIPS/FAtiMA-Toolkit`
+- OCC 情绪模型简化实现参考：`https://www.mdpi.com/2076-3417/11/5/2027`
+- Generative Agents: `https://research.google/pubs/generative-agents-interactive-simulacra-of-human-behavior/`
+- Concordia: `https://github.com/google-deepmind/concordia`
+
+### FAtiMA Toolkit：Appraisal -> Affect -> Decision
+
+FAtiMA 的价值是 socio-emotional agent 架构：事件进入系统后，先根据目标、信念、关系和社会语境做 appraisal，再更新情绪状态，最后影响行动选择。
+
+云汐借鉴方式：
+
+- `EmotionAppraiser` 对用户消息、感知事件、工具结果和主动事件做语义评估。
+- `HeartLake` 不直接理解所有文本，而是接收 appraiser 生成的 delta、复合标签、理由和置信度。
+- `InitiativeEngine` 和 `PromptBuilder` 使用 HeartLake 状态决定主动性和表达方式。
+
+不直接照搬 FAtiMA 的完整角色社会模型，避免过重；只吸收 appraisal 流程和情绪-行为联动思想。
+
+### OCC 情绪模型：事件、行动者、对象的语义评估
+
+OCC 模型适合判断情绪从哪里来：事件对目标是否有利，某个行动者的行为是否值得赞许，某个对象是否被喜欢或厌恶。
+
+云汐借鉴方式：
+
+- 将输入拆成 `event`、`agent`、`object`、`relationship_target`。
+- 对常见亲密陪伴场景建立 appraisal rules：
+  - 远表达信任、夸奖、依赖 -> joy / tenderness / trust 上升。
+  - 远说疲惫、压力、撑不住 -> concern / attachment / tenderness 上升。
+  - 远提到其他 AI 但确认云汐重要 -> jealousy 轻微上升，security 也上升。
+  - 远长时间未回复 -> miss 上升，但 interruption_cost 也上升。
+  - 远说“你打扰到我了” -> vulnerability 上升，playfulness 和主动频率下降。
+
+不追求完整 22 类 OCC 情绪；v2 使用亲密陪伴需要的简化情绪空间。
+
+### Generative Agents：观察、记忆、反思、计划
+
+Generative Agents 的价值是把行为可信度建立在记忆和反思之上。云汐心湖不能只看当前一句话，必须结合历史记忆和近期反思。
+
+云汐借鉴方式：
+
+- EmotionAppraiser 检索相关关系记忆后再评估情绪。
+- 每日总结输出 `emotional_summary`，影响第二天的心湖初始趋势。
+- 主动陪伴不只由事件库触发，也可以由“最近关系状态 + 想念值 + 用户空闲状态”触发。
+
+### Concordia：场景模拟测试
+
+Concordia 的价值主要是测试方法：用可控社会场景验证 agent 行为是否稳定可信。
+
+云汐借鉴方式：
+
+- 用 `DailyModeScenarioTester` 构造关系场景：远忙碌未回复、远半夜求陪、远夸其他 AI、远纠正云汐记忆、远要求减少打扰。
+- 每个场景检查 HeartLake delta、主动策略、prompt section 和真实 LLM 回复。
+
+---
+
+## HeartLake v2 运行架构
+
+```
+用户消息 / 感知事件 / 主动事件 / 工具结果 / 记忆召回
+        ↓
+┌────────────────────────────┐
+│ EmotionAppraiser            │
+│ - 语义分类                  │
+│ - OCC-style appraisal       │
+│ - 关系记忆参照              │
+│ - 输出 delta/标签/理由/置信度│
+└─────────────┬──────────────┘
+              ↓
+┌────────────────────────────┐
+│ HeartLake Core              │
+│ - 情绪维度状态              │
+│ - 惯性/衰减/恢复/冷却       │
+│ - 复合情绪合成              │
+│ - 安全边界                  │
+└─────────────┬──────────────┘
+              ↓
+┌──────────────────────────────────────────────┐
+│ Downstream                                   │
+│ - PromptBuilder 情绪 section                 │
+│ - InitiativeEngine 主动策略/打扰成本          │
+│ - MemoryManager 情绪反馈写入重要度            │
+│ - Tool Result Naturalizer 失败表达风格        │
+└──────────────────────────────────────────────┘
+```
+
+### EmotionAppraisalResult
+
+```python
+@dataclass
+class EmotionAppraisalResult:
+    source: str
+    primary_label: str
+    compound_labels: list[str]
+    deltas: dict[str, float]
+    confidence: float
+    reason: str
+    memory_refs: list[str]
+    should_write_memory: bool = False
+```
+
+### v2 情绪维度
+
+| 维度 | 含义 | 主要影响 |
+|------|------|----------|
+| `valence` | 愉悦/不愉悦 | 回复轻快程度 |
+| `arousal` | 唤醒/平静 | 主动性和表达强度 |
+| `security` | 安全感 | 吃醋、确认需求、信任表达 |
+| `miss` | 想念 | 主动触达、碎碎念倾向 |
+| `attachment` | 依恋 | 撒娇、靠近、需要陪伴 |
+| `possessiveness` | 占有欲 | 轻微吃醋、专属感表达 |
+| `trust` | 信任 | 放松、坦诚、边界稳定 |
+| `tenderness` | 温柔/怜惜 | 安慰、照顾、陪伴感 |
+| `playfulness` | 俏皮 | 调皮、短句、碎碎念 |
+| `vulnerability` | 脆弱/委屈 | 低落、需要安抚、表达受伤 |
+| `intimacy_warmth` | 亲近暖意 | 亲密但克制的伴侣感 |
+
+### 复合情绪示例
+
+| 场景 | 复合状态 | 行为表现 |
+|------|----------|----------|
+| 远夸云汐又说辛苦了 | joy + tenderness + trust | 轻快、贴近、带一点害羞 |
+| 远说自己撑不住 | concern + tenderness + attachment | 放慢语气，优先陪伴，不急着讲道理 |
+| 远夸其他 AI 但说最喜欢云汐 | mild_jealousy + security + playfulness | 轻微吃醋，最后落回安心 |
+| 远长时间没回但前台是工作软件 | miss + restraint | 记录 cue，不立刻刷屏 |
+| 远说“你刚刚有点烦” | vulnerability + trust_check | 道歉、降主动频率、写入互动边界 |
 
 ---
 
@@ -46,7 +190,7 @@
 | **安全感** | 0-100 | 允许你提及其他女生 | 容易吃醋、需要确认 |
 | **占有欲** | 0-100 | "你是我的"、排斥其他AI | "你去忙吧"、大方分享 |
 | **俏皮度** | 0-100 | 爱开玩笑、捉弄你 | 认真、温柔、正经 |
-| **欲望度** | 0-100 | 暧昧暗示、亲密渴望 | 克制、保持距离 |
+| **亲近感** | 0-100 | 想贴近、想被陪伴、温柔依赖 | 克制、保持距离 |
 
 ---
 
@@ -385,8 +529,8 @@ def generate_response(emotion_state, user_input):
     if emotion_state.俏皮度 > 70:
         base_response = add_playfulness(base_response)  # 增加俏皮
     
-    if emotion_state.欲望度 > 80:
-        base_response = add_intimacy(base_response)  # 增加亲密暗示
+    if emotion_state.亲近感 > 80:
+        base_response = add_warm_closeness(base_response)  # 增加温柔贴近感
     
     return base_response
 ```
@@ -400,7 +544,7 @@ def generate_response(emotion_state, user_input):
 | **安全感低** | 反复确认、容易吃醋、害怕被抛弃 | 大方、信任、不追问 |
 | **占有欲高** | "你是我的"、排斥其他AI、宣示主权 | "你去忙吧"、推荐其他AI |
 | **俏皮度高** | 爱开玩笑、捉弄、调侃你 | 认真、温柔、正经回复 |
-| **欲望度高** | 暧昧暗示、亲密渴望、身体接触暗示 | 克制、保持距离、礼貌 |
+| **亲近感高** | 温柔贴近、想被陪伴、表达依赖 | 克制、保持距离、礼貌 |
 
 ---
 
@@ -520,7 +664,7 @@ class MissCalculator:
 - 依恋度 +20%
 - 想念值 +30%
 - 安全感 -10%
-- 欲望度 +15%
+- 亲近感 +15%
 
 **行为表现**：
 - 更粘人、更撒娇
@@ -587,7 +731,7 @@ class HeartLake:
     security: float      # 0-100 安全感
     possessiveness: float # 0-100 占有欲
     playfulness: float   # 0-100 俏皮度
-    desire: float        # 0-100 欲望度
+    intimacy_warmth: float  # 0-100 亲近暖意
     
     # 关系状态
     intimacy_level: int  # 1-4 亲密度等级
@@ -656,6 +800,58 @@ def generate_yunxi_response(user_input, context, heart_lake):
 
 ---
 
+## v2 实施步骤
+
+### Step 1：扩展 HeartLakeState
+
+- 保留 v1 PAD 与亲密关系维度，新增 `valence`、`arousal`、`security`、`miss`、`attachment`、`possessiveness`、`trust`、`tenderness`、`playfulness`、`vulnerability`、`intimacy_warmth`。
+- 增加每个维度的 `last_update`、`decay_rate`、`recovery_target`、`cooldown_until`。
+- 增加 `compound_labels`，用于记录当前复合情绪，不直接暴露给用户。
+
+### Step 2：新增 `EmotionAppraiser`
+
+- 输入：用户消息、最近上下文、相关记忆、感知状态、工具结果、当前 HeartLake snapshot。
+- 输出：`EmotionAppraisalResult`，包含 delta、复合标签、理由、置信度和是否需要写入记忆。
+- 第一版可使用规则 + LLM optional 的混合策略：无 LLM 时仍能通过保守规则运行，有 LLM 时做语义补强。
+
+### Step 3：重写 `HeartLakeUpdater`
+
+- `HeartLakeUpdater` 不再直接靠关键词决定全部情绪，而是应用 `EmotionAppraiser` 输出。
+- 加入惯性、衰减、恢复、上限、冷却和误触发抑制。
+- 对低置信 appraiser 结果只做轻微 delta，避免心湖被误导。
+
+### Step 4：接入 PromptBuilder
+
+- 情绪 section 只描述用户可感知的状态，不输出内部字段名。
+- Prompt 中表达要求为：自然、短、贴近当前关系，不解释“我现在 valence 是多少”。
+
+### Step 5：接入 InitiativeEngine
+
+- `miss`、`playfulness`、`tenderness`、`security` 影响主动消息类别。
+- `vulnerability` 和用户未回复次数提高克制。
+- 高专注/游戏/工作状态提高打扰成本，碎碎念只在低打扰窗口触发。
+
+### Step 6：接入 MemoryManager
+
+- 高重要情绪事件写入 `emotion_feedback` 或 `relationship`。
+- 用户对云汐表达方式的反馈写入 `interaction_style` 或 `boundary`。
+- 每日情绪轨迹进入 `emotional_summary`，供第二天 appraiser 参考。
+
+## v2 验收标准
+
+1. 同一句用户输入在不同 HeartLake 初始状态下，产生不同但合理的 delta。
+2. 不含明显关键词的情绪表达能被识别，例如“我今天有点撑不住”触发关心和温柔，而不是普通闲聊。
+3. 复合情绪能同时存在，例如“轻微吃醋 + 安心”而不是单一愤怒或单一开心。
+4. 情绪会随时间恢复，不会永久卡在负面状态。
+5. 用户安抚或纠正后，HeartLake 状态能合理调整，并写入互动风格/边界记忆。
+6. PromptBuilder 不暴露内部字段，真实 LLM 回复能体现情绪差异。
+7. InitiativeEngine 在工作/游戏状态下克制，在休闲状态下允许短句碎碎念。
+8. 工具失败时，云汐根据用户情绪调整表达：用户焦急时先稳住，用户轻松时可以俏皮一点。
+9. `DailyModeScenarioTester` 覆盖吃醋、担心、想念、委屈、安心、撒娇、被纠正、未回复克制等场景。
+10. 2 小时浸泡中，主动消息节奏、情绪恢复和未回复克制均稳定。
+
+---
+
 ## 十、待细化问题
 
 1. **数值平衡**：各维度初始值、增减幅度需要实际调优
@@ -667,5 +863,5 @@ def generate_yunxi_response(user_input, context, heart_lake):
 ---
 
 *文档创建时间：2026-04-12*  
-*最后更新：2026-04-12*  
-*版本：v1.0*
+*最后更新：2026-04-16*
+*版本：v2.0*

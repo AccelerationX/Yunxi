@@ -51,6 +51,26 @@ class FinalizingLLM:
         return FakeResponse(content="好啦，已经自然处理好了。")
 
 
+class ToolThenFinalizingLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return FakeResponse(
+                content="",
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        name="file_write",
+                        arguments={"path": "note.txt", "content": "hello"},
+                    )
+                ],
+            )
+        return FakeResponse(content="写好了，我把结果确认过了。")
+
+
 class FakeClient(MCPClient):
     def __init__(self) -> None:
         super().__init__()
@@ -142,8 +162,27 @@ async def test_tool_ask_creates_natural_confirmation_then_approval(tmp_path):
 
     assert "点头" in first.content
     assert "工具执行遇到问题" not in first.content
-    assert "已经按你点头" in second.content
+    assert "处理好了" in second.content
     assert hub.client.calls == [("file_write", {"path": "note.txt", "content": "hello"})]
+
+
+@pytest.mark.asyncio
+async def test_tool_confirmation_uses_llm_finalization_after_approval(tmp_path):
+    hub = _hub(tmp_path)
+    llm = ToolThenFinalizingLLM()
+    engine = YunxiExecutionEngine(
+        llm=llm,
+        mcp_hub=hub,
+        memory_manager=FakeMemory(),
+        config=EngineConfig(max_turns=1, enable_tool_use=True, enable_skill_fastpath=False),
+    )
+    context = SimpleNamespace(mode="daily_mode")
+
+    await engine.respond("帮我写个文件", "system", context)
+    second = await engine.respond("确认", "system", context)
+
+    assert second.content == "写好了，我把结果确认过了。"
+    assert llm.calls == 2
 
 
 @pytest.mark.asyncio

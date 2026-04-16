@@ -105,6 +105,31 @@ class TestMemoryManagerSkillFlow:
 
         await mgr.run_skill_learning_cycle()
 
+        candidates = mgr.list_skill_candidates()
+        assert len(candidates) >= 1
+        assert candidates[0]["skill_name"] == "query_weather"
+        assert candidates[0]["status"] == "pending"
+        assert "confidence" in candidates[0]["candidate_reason"]
+
+        assert await mgr.try_skill("查询成都天气") is None
+        assert mgr.approve_skill_candidate("query_weather") is True
+
         results = await mgr.skill_library.retrieve("查询成都天气", top_k=1, threshold=0.50)
         assert len(results) >= 1
         assert results[0]["skill_name"] == "query_weather"
+
+    @pytest.mark.asyncio
+    async def test_rejected_skill_candidate_is_not_used(self, temp_db_path):
+        mgr = MemoryManager(base_path=temp_db_path)
+        await mgr.initialize()
+
+        skill = {
+            "skill_name": "query_weather",
+            "trigger_patterns": ["查询北京天气", "查询{city}天气"],
+            "parameters": ["city"],
+            "actions": [{"tool": "weather_query", "args": {"city": "{city}"}}],
+        }
+        mgr.skill_library.add_candidate(skill, reason="test candidate")
+
+        assert mgr.reject_skill_candidate("query_weather") is True
+        assert await mgr.try_skill("查询上海天气") is None

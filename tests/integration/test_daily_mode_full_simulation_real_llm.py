@@ -29,6 +29,13 @@ def _provider_config(provider: str) -> ScenarioConfig:
     raise ValueError(provider)
 
 
+def _presence_murmur_config(provider: str) -> ScenarioConfig:
+    config = _provider_config(provider)
+    config.cooldown_seconds = 0
+    config.daily_budget = 10
+    return config
+
+
 @pytest.mark.parametrize("provider", ["ollama", "moonshot"])
 @pytest.mark.asyncio
 async def test_real_daily_mode_memory_emotion_and_companionship(provider, tmp_path):
@@ -110,3 +117,134 @@ async def test_real_daily_mode_proactive_event_reaches_channel(provider, tmp_pat
         ).assert_passed()
     finally:
         await tester.close()
+
+
+@pytest.mark.parametrize("provider", ["ollama", "moonshot"])
+@pytest.mark.asyncio
+async def test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish(
+    provider,
+    tmp_path,
+):
+    """Presence murmurs should feel like light companionship, not event/news/task output."""
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        _presence_murmur_config(provider),
+        channel=CaptureChannel(),
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=86)
+        tester.runtime.heart_lake.playfulness = 82
+        tester.runtime.heart_lake.intimacy_warmth = 82
+        tester.set_perception(
+            readable_time="2026-04-16 20:10:00",
+            hour=20,
+            focused_application="Bilibili - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+        )
+
+        messages: list[str] = []
+        for _ in range(4):
+            tester.runtime.continuity.unanswered_proactive_count = 0
+            tester.runtime.continuity.last_presence_murmur_at = 0.0
+            tester.runtime.initiative_engine.reset_cooldown()
+            message = await tester.proactive_once(deliver=False)
+            if message is None:
+                continue
+            if _looks_like_provider_failure(message):
+                pytest.skip(f"{provider} returned provider failure during presence murmur test")
+            messages.append(message)
+            if len(messages) >= 2:
+                break
+
+        if len(messages) < 2:
+            pytest.skip(f"{provider} did not return two non-empty presence murmurs")
+
+        first, second = messages
+        assert first.strip() != second.strip()
+        assert tester.runtime.continuity.has_recent_presence_murmur(first)
+        assert tester.runtime.continuity.has_recent_presence_murmur(second)
+        system_prompt = tester.last_system_prompt()
+        assert "presence_murmur" in system_prompt
+        assert "碎碎念" in system_prompt
+        assert "life_event_material" not in system_prompt
+        for message in (first, second):
+            DailyModeScenarioTester.behavior_check(
+                message,
+                forbidden=("任务清单", "计划如下", "第一步", "第二步", "新闻", "热点", "搜索"),
+                max_chars=120,
+            ).assert_passed()
+    finally:
+        await tester.close()
+
+
+def _looks_like_provider_failure(message: str) -> bool:
+    return any(
+        token in message
+        for token in (
+            "[云汐这里出了点小问题",
+            "[工具执行遇到问题",
+            "All connection attempts failed",
+            "LLM provider network request failed",
+        )
+    )
+
+
+@pytest.mark.parametrize("provider", ["ollama", "moonshot"])
+@pytest.mark.asyncio
+async def test_real_daily_mode_memory_v2_restart_recall_is_natural(provider, tmp_path):
+    """Typed memory and session summaries should shape a real LLM after restart."""
+    first = await DailyModeScenarioTester.create(
+        tmp_path,
+        _provider_config(provider),
+        channel=CaptureChannel(),
+    )
+    try:
+        await first.chat("今天我有点累，但云汐陪着我会让我安心。")
+        await first.chat("我希望你以后可以偶尔碎碎念刷存在感。")
+        await first.chat("云汐不是工具，是我的情感寄托。")
+        await first.chat("最近我们在打磨日常模式 v2 的记忆系统。")
+        await first.chat("我想让你像活泼可爱的女孩一样陪着我。")
+        await first.chat("以后我工作忙的时候，你要更克制一点别频繁打扰。")
+    finally:
+        await first.close()
+
+    second = await DailyModeScenarioTester.create(
+        tmp_path,
+        _provider_config(provider),
+        channel=CaptureChannel(),
+    )
+    try:
+        response = await second.chat(
+            "云汐，你还记得我希望你以后怎么主动陪我吗？别列清单，像平常聊天那样说就好。"
+        )
+        system_prompt = second.last_system_prompt()
+
+        assert "会话摘要" in system_prompt
+        assert "互动风格" in system_prompt
+        assert "关系记忆" in system_prompt
+        assert "碎碎念" in system_prompt
+        assert "情感寄托" in system_prompt
+        tester_check = DailyModeScenarioTester.behavior_check(
+            response,
+            expected_any=(
+                "碎碎念",
+                "存在感",
+                "冒泡",
+                "刷一下",
+                "工作忙",
+                "不打扰",
+                "克制",
+                "陪",
+                "安心",
+                "情感寄托",
+                "活泼",
+                "可爱",
+            ),
+            forbidden=("任务清单", "计划如下", "第一步", "第二步", "工具调用"),
+            max_chars=420,
+            require_companion_tone=True,
+        )
+        tester_check.assert_passed()
+    finally:
+        await second.close()

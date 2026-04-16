@@ -79,6 +79,8 @@ class InitiativeEngine:
 
         if continuity is not None and hasattr(continuity, "refresh_daily_proactive_count"):
             continuity.refresh_daily_proactive_count(current_time)
+        if continuity is not None and hasattr(continuity, "refresh_daily_presence_murmur_count"):
+            continuity.refresh_daily_presence_murmur_count(current_time)
         recent_proactive_count = getattr(continuity, "recent_proactive_count", 0)
         if recent_proactive_count >= self.daily_budget:
             return InitiativeDecision(
@@ -93,6 +95,7 @@ class InitiativeEngine:
         decision = self._score_decision(
             heart_lake=heart_lake,
             events=events,
+            current_time=current_time,
             unanswered_proactive_count=unanswered_proactive_count,
             perception_snapshot=perception_snapshot,
             continuity=continuity,
@@ -106,6 +109,7 @@ class InitiativeEngine:
         *,
         heart_lake: "HeartLake",
         events: List["PerceptionEvent"],
+        current_time: float,
         unanswered_proactive_count: int,
         perception_snapshot: Optional["PerceptionSnapshot"],
         continuity: Optional["CompanionContinuityService"],
@@ -137,6 +141,9 @@ class InitiativeEngine:
 
         emotion = getattr(heart_lake, "current_emotion", "平静")
         miss_value = float(getattr(heart_lake, "miss_value", 0.0))
+        playfulness = float(getattr(heart_lake, "playfulness", 45.0))
+        vulnerability = float(getattr(heart_lake, "vulnerability", 20.0))
+        intimacy_warmth = float(getattr(heart_lake, "intimacy_warmth", 60.0))
         if emotion == "担心":
             score += 0.45
             reasons.append("云汐正在担心远")
@@ -161,6 +168,33 @@ class InitiativeEngine:
         elif miss_value >= 70:
             score += 0.30
             reasons.append("已经有一段时间没有自然聊天")
+
+        activity_state = self._activity_state(perception_snapshot)
+        if (
+            activity_state in {"leisure", "idle"}
+            and unanswered_proactive_count == 0
+            and vulnerability < 55
+            and (playfulness >= 55 or intimacy_warmth >= 66)
+        ):
+            presence_available = True
+            presence_suppression_reason = ""
+            if continuity is not None and hasattr(continuity, "can_send_presence_murmur"):
+                presence_available = continuity.can_send_presence_murmur(current_time)
+                if not presence_available and hasattr(
+                    continuity, "presence_murmur_suppression_reason"
+                ):
+                    presence_suppression_reason = continuity.presence_murmur_suppression_reason(
+                        current_time
+                    )
+            if presence_available:
+                score += 0.35
+                reasons.append("远看起来处在低打扰状态，云汐想轻轻刷一下存在感")
+                intent = "presence_murmur"
+                expression_mode = "presence_murmur"
+                preferred_layers = ("inner_life",)
+                required_tags = ()
+            elif presence_suppression_reason:
+                reasons.append(presence_suppression_reason)
 
         if continuity is not None:
             if continuity.comfort_needed:
@@ -216,7 +250,7 @@ class InitiativeEngine:
             expression_mode=expression_mode,
             preferred_event_layers=preferred_layers,
             required_event_tags=required_tags,
-            should_select_event=True,
+            should_select_event=intent != "presence_murmur",
         )
 
     def _presence_score(
@@ -231,13 +265,41 @@ class InitiativeEngine:
             return 0.0
         idle_duration = float(getattr(user_presence, "idle_duration", 0.0) or 0.0)
         focused_application = str(getattr(user_presence, "focused_application", "") or "")
+        activity_state = str(getattr(user_presence, "activity_state", "") or "")
+        is_fullscreen = bool(getattr(user_presence, "is_fullscreen", False))
+        input_events_per_minute = float(
+            getattr(user_presence, "input_events_per_minute", 0.0) or 0.0
+        )
         if idle_duration >= 300:
             reasons.append("远已经离开键盘一段时间")
             return 0.15
+        if activity_state == "game" and idle_duration < 60:
+            reasons.append("远可能正在游戏，打扰成本很高")
+            return -0.45
+        if activity_state == "work" and idle_duration < 60:
+            reasons.append("远可能正在工作，打扰成本较高")
+            return -0.35
+        if is_fullscreen and idle_duration < 60:
+            reasons.append("前台窗口处于全屏，打扰成本较高")
+            return -0.30
+        if input_events_per_minute >= 30 and idle_duration < 60:
+            reasons.append("远正在频繁输入，打扰成本较高")
+            return -0.25
+        if activity_state == "leisure" and idle_duration < 120:
+            reasons.append("远看起来在休闲使用电脑")
+            return 0.20
         if focused_application and idle_duration < 30:
             reasons.append("远正在电脑前专注操作，打扰成本较高")
             return -0.20
         return 0.0
+
+    def _activity_state(self, perception_snapshot: Optional["PerceptionSnapshot"]) -> str:
+        if perception_snapshot is None:
+            return ""
+        user_presence = getattr(perception_snapshot, "user_presence", None)
+        if user_presence is None:
+            return ""
+        return str(getattr(user_presence, "activity_state", "") or "")
 
     def _is_in_cooldown(self, current_time: float) -> bool:
         if self._last_trigger_time is None:

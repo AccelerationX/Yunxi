@@ -232,6 +232,12 @@ def build_browser_server_config() -> dict[str, object]:
             "browser_extract_links": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
             "browser_click": [PermissionLevel.NETWORK.value, PermissionLevel.EXECUTE.value],
             "browser_type": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
+            "browser_session_open": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+            "browser_session_snapshot": [PermissionLevel.READ.value],
+            "browser_session_click": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+            "browser_session_type": [PermissionLevel.WRITE.value],
+            "browser_session_fill_form": [PermissionLevel.WRITE.value],
+            "browser_session_submit": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
         },
     }
 
@@ -248,6 +254,8 @@ def build_gui_agent_server_config() -> dict[str, object]:
         "permissions": {
             "gui_observe": [PermissionLevel.READ.value],
             "gui_list_macros": [PermissionLevel.READ.value],
+            "gui_macro_stats": [PermissionLevel.READ.value],
+            "gui_verify_text": [PermissionLevel.READ.value],
             "gui_save_macro": [PermissionLevel.WRITE.value],
             "gui_run_macro": [PermissionLevel.EXECUTE.value],
             "gui_click": [PermissionLevel.EXECUTE.value],

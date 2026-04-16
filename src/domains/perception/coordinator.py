@@ -9,6 +9,7 @@ from __future__ import annotations
 import ctypes
 import concurrent.futures
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Protocol
@@ -26,8 +27,24 @@ class TimeContext:
 @dataclass
 class UserPresence:
     focused_application: str = ""
+    foreground_process_name: str = ""
+    foreground_window_class: str = ""
     idle_duration: float = 0.0
     is_at_keyboard: bool = True
+    is_fullscreen: bool = False
+    input_events_per_minute: float = 0.0
+    activity_state: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.activity_state:
+            self.activity_state = classify_activity_state(
+                self.focused_application,
+                self.foreground_process_name,
+                self.idle_duration,
+                self.is_at_keyboard,
+                self.is_fullscreen,
+                self.input_events_per_minute,
+            )
 
 
 @dataclass
@@ -38,6 +55,73 @@ class SystemState:
 @dataclass
 class ExternalInfo:
     weather: str = ""
+
+
+@dataclass(frozen=True)
+class ForegroundWindowInfo:
+    """Foreground window details collected from the OS."""
+
+    title: str = ""
+    class_name: str = ""
+    process_name: str = ""
+    is_fullscreen: bool = False
+
+
+def classify_activity_state(
+    focused_application: str = "",
+    foreground_process_name: str = "",
+    idle_duration: float = 0.0,
+    is_at_keyboard: bool = True,
+    is_fullscreen: bool = False,
+    input_events_per_minute: float = 0.0,
+) -> str:
+    """Classify the user's coarse computer-usage state for interruption cost."""
+    app = f"{focused_application or ''} {foreground_process_name or ''}".lower()
+    process = (foreground_process_name or "").lower()
+    idle = float(idle_duration or 0.0)
+    if idle >= 900 or not is_at_keyboard and idle >= 300:
+        return "away"
+    if idle >= 300:
+        return "idle"
+
+    work_tokens = (
+        "code", "visual studio", "pycharm", "idea", "webstorm", "terminal",
+        "powershell", "cmd", "windows terminal", "notepad++", "word", "excel",
+        "powerpoint", "wps", "obsidian", "typora", "photoshop", "premiere",
+        "blender", "unity", "unreal", "figma",
+    )
+    game_tokens = (
+        "steam", "epic games", "valorant", "league of legends", "genshin",
+        "yuanshen", "starrail", "zenless", "eldenring", "palworld", "cs2",
+        "dota2", "lol", "pubg", "原神", "崩坏", "英雄联盟", "绝地求生",
+        "minecraft", "game",
+    )
+    leisure_tokens = (
+        "youtube", "bilibili", "哔哩", "netflix", "spotify", "music",
+        "qq音乐", "网易云音乐", "vlc", "potplayer", "chrome", "edge",
+        "firefox", "browser", "浏览器",
+    )
+    video_processes = ("vlc", "potplayer", "mpv", "chrome", "edge", "firefox")
+    work_processes = (
+        "code.exe", "pycharm", "idea", "webstorm", "devenv.exe", "windowsterminal",
+        "powershell", "cmd.exe", "winword", "excel", "powerpnt", "obsidian",
+        "typora", "photoshop", "premiere", "blender", "figma",
+    )
+
+    if any(token in app for token in game_tokens):
+        return "game"
+    if is_fullscreen and process and not any(token in process for token in video_processes):
+        if not any(token in process for token in work_processes):
+            return "game"
+    if any(token in app for token in work_tokens):
+        return "work"
+    if any(token in app for token in leisure_tokens):
+        return "leisure"
+    if input_events_per_minute >= 45 and is_fullscreen:
+        return "game"
+    if app:
+        return "unknown"
+    return "unknown"
 
 
 @dataclass
@@ -79,19 +163,33 @@ class TimePerceptionProvider:
 class WindowsUserPresenceProvider:
     """Windows foreground-window and idle perception."""
 
+    def __init__(self) -> None:
+        self._previous_idle_seconds: Optional[float] = None
+        self._last_inferred_input_at: float = 0.0
+        self._input_event_times: List[float] = []
+
     def fetch(self) -> PerceptionSnapshot:
         """Collect foreground app and keyboard-idle state."""
         idle_seconds = self._idle_duration_seconds()
+        foreground = self._foreground_window_info()
+        input_events_per_minute = self._input_events_per_minute(idle_seconds)
         return PerceptionSnapshot(
             user_presence=UserPresence(
-                focused_application=self._focused_application(),
+                focused_application=foreground.title,
+                foreground_process_name=foreground.process_name,
+                foreground_window_class=foreground.class_name,
                 idle_duration=idle_seconds,
                 is_at_keyboard=idle_seconds < 60.0,
+                is_fullscreen=foreground.is_fullscreen,
+                input_events_per_minute=input_events_per_minute,
             ),
         )
 
     def _focused_application(self) -> str:
         """读取当前前台窗口标题。"""
+        info = self._foreground_window_info()
+        if info.title:
+            return info.title
         try:
             import uiautomation as auto
 
@@ -106,6 +204,92 @@ class WindowsUserPresenceProvider:
         except Exception as exc:
             logger.debug("Failed to read focused application: %s", exc)
             return ""
+
+    def _foreground_window_info(self) -> "ForegroundWindowInfo":
+        """Read foreground title, class, process name, and fullscreen state."""
+        if not hasattr(ctypes, "windll"):
+            return ForegroundWindowInfo()
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return ForegroundWindowInfo()
+
+            title_length = user32.GetWindowTextLengthW(hwnd)
+            title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+            user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
+
+            class_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_buffer, 256)
+
+            process_id = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+            process_name = self._process_name(int(process_id.value))
+            is_fullscreen = self._is_fullscreen_window(hwnd)
+            return ForegroundWindowInfo(
+                title=_format_focused_application(title_buffer.value, class_buffer.value),
+                class_name=class_buffer.value,
+                process_name=process_name,
+                is_fullscreen=is_fullscreen,
+            )
+        except (AttributeError, OSError) as exc:
+            logger.debug("Failed to read foreground window info: %s", exc)
+            return ForegroundWindowInfo()
+
+    def _process_name(self, process_id: int) -> str:
+        if process_id <= 0:
+            return ""
+        try:
+            import psutil
+
+            return str(psutil.Process(process_id).name() or "")
+        except ImportError:
+            return ""
+        except (OSError, psutil.Error) as exc:
+            logger.debug("Failed to read foreground process name: %s", exc)
+            return ""
+
+    def _is_fullscreen_window(self, hwnd: int) -> bool:
+        if not hasattr(ctypes, "windll"):
+            return False
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", ctypes.c_ulong),
+                ("rcMonitor", RECT),
+                ("rcWork", RECT),
+                ("dwFlags", ctypes.c_ulong),
+            ]
+
+        try:
+            user32 = ctypes.windll.user32
+            rect = RECT()
+            if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return False
+            monitor = user32.MonitorFromWindow(hwnd, 2)
+            monitor_info = MONITORINFO()
+            monitor_info.cbSize = ctypes.sizeof(MONITORINFO)
+            if not user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+                return False
+            monitor_rect = monitor_info.rcMonitor
+            tolerance = 2
+            return (
+                rect.left <= monitor_rect.left + tolerance
+                and rect.top <= monitor_rect.top + tolerance
+                and rect.right >= monitor_rect.right - tolerance
+                and rect.bottom >= monitor_rect.bottom - tolerance
+            )
+        except (AttributeError, OSError) as exc:
+            logger.debug("Failed to read fullscreen state: %s", exc)
+            return False
 
     def _idle_duration_seconds(self) -> float:
         """读取用户最近一次键鼠输入距今的秒数。"""
@@ -128,6 +312,26 @@ class WindowsUserPresenceProvider:
         except OSError as exc:
             logger.debug("Failed to read idle duration: %s", exc)
             return 0.0
+
+    def _input_events_per_minute(self, idle_seconds: float) -> float:
+        """Estimate recent input frequency without installing a global hook."""
+        now = time.time()
+        previous = self._previous_idle_seconds
+        inferred_new_input = False
+        if idle_seconds < 2.0:
+            if previous is None or idle_seconds + 0.5 < previous:
+                inferred_new_input = True
+            elif now - self._last_inferred_input_at >= 2.0:
+                inferred_new_input = True
+        if inferred_new_input:
+            self._input_event_times.append(now)
+            self._last_inferred_input_at = now
+        self._previous_idle_seconds = idle_seconds
+        cutoff = now - 60.0
+        self._input_event_times = [
+            event_time for event_time in self._input_event_times if event_time >= cutoff
+        ]
+        return float(len(self._input_event_times))
 
 
 class SystemResourceProvider:
@@ -251,8 +455,12 @@ def merge_snapshots(*snapshots: PerceptionSnapshot) -> PerceptionSnapshot:
             merged.time_context = snapshot.time_context
         if (
             snapshot.user_presence.focused_application
+            or snapshot.user_presence.foreground_process_name
+            or snapshot.user_presence.foreground_window_class
             or snapshot.user_presence.idle_duration
             or not snapshot.user_presence.is_at_keyboard
+            or snapshot.user_presence.is_fullscreen
+            or snapshot.user_presence.input_events_per_minute
         ):
             merged.user_presence = snapshot.user_presence
         if snapshot.system_state.cpu_percent:
@@ -325,7 +533,62 @@ class PerceptionCoordinator:
                 PerceptionEvent(
                     event_type="app_changed",
                     description=f"用户切换到 {new_app}",
-                    data={"from": old_app, "to": new_app},
+                    data={
+                        "from": old_app,
+                        "to": new_app,
+                        "process": getattr(new.user_presence, "foreground_process_name", ""),
+                    },
+                )
+            )
+
+        old_activity = getattr(old.user_presence, "activity_state", "")
+        new_activity = getattr(new.user_presence, "activity_state", "")
+        if old_activity != new_activity and new_activity:
+            events.append(
+                PerceptionEvent(
+                    event_type="activity_state_changed",
+                    description=f"用户电脑使用状态变为 {new_activity}",
+                    data={"from": old_activity, "to": new_activity},
+                )
+            )
+
+        old_fullscreen = bool(getattr(old.user_presence, "is_fullscreen", False))
+        new_fullscreen = bool(getattr(new.user_presence, "is_fullscreen", False))
+        if not old_fullscreen and new_fullscreen:
+            events.append(
+                PerceptionEvent(
+                    event_type="fullscreen_started",
+                    description="前台窗口进入全屏",
+                    data={
+                        "application": new_app,
+                        "process": getattr(new.user_presence, "foreground_process_name", ""),
+                    },
+                )
+            )
+        elif old_fullscreen and not new_fullscreen:
+            events.append(
+                PerceptionEvent(
+                    event_type="fullscreen_ended",
+                    description="前台窗口退出全屏",
+                    data={
+                        "application": new_app,
+                        "process": getattr(new.user_presence, "foreground_process_name", ""),
+                    },
+                )
+            )
+
+        old_input_rate = float(
+            getattr(old.user_presence, "input_events_per_minute", 0.0) or 0.0
+        )
+        new_input_rate = float(
+            getattr(new.user_presence, "input_events_per_minute", 0.0) or 0.0
+        )
+        if old_input_rate < 30 <= new_input_rate:
+            events.append(
+                PerceptionEvent(
+                    event_type="high_input_activity",
+                    description="用户正在频繁输入",
+                    data={"input_events_per_minute": new_input_rate},
                 )
             )
 
@@ -359,3 +622,11 @@ class PerceptionCoordinator:
             )
 
         return events
+
+
+def _format_focused_application(title: str, class_name: str = "") -> str:
+    title = (title or "").strip()
+    class_name = (class_name or "").strip()
+    if title and class_name:
+        return f"{title} ({class_name})"
+    return title or class_name

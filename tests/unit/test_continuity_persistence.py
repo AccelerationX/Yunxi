@@ -64,6 +64,52 @@ def test_daily_proactive_count_resets_on_new_date():
     assert continuity.recent_proactive_count == 0
 
 
+def test_presence_murmur_tracks_uniqueness_budget_and_cooldown(tmp_path):
+    state_path = tmp_path / "continuity_state.json"
+    continuity = CompanionContinuityService(storage_path=state_path)
+
+    assert continuity.can_send_presence_murmur(
+        1776268800.0,
+        cooldown_seconds=60,
+        daily_budget=2,
+    )
+    continuity.record_presence_murmur("tiny wave from yunxi", 1776268800.0)
+
+    assert continuity.has_recent_presence_murmur(" tiny   wave from yunxi ")
+    assert not continuity.can_send_presence_murmur(
+        1776268830.0,
+        cooldown_seconds=60,
+        daily_budget=2,
+    )
+    assert (
+        continuity.presence_murmur_suppression_reason(
+            1776268830.0,
+            cooldown_seconds=60,
+            daily_budget=2,
+        )
+        == "presence_murmur_cooldown"
+    )
+
+    continuity.record_presence_murmur("second small ping", 1776268920.0)
+    assert not continuity.can_send_presence_murmur(
+        1776268980.0,
+        cooldown_seconds=0,
+        daily_budget=2,
+    )
+    assert (
+        continuity.presence_murmur_suppression_reason(
+            1776268980.0,
+            cooldown_seconds=0,
+            daily_budget=2,
+        )
+        == "presence_murmur_daily_budget_exhausted"
+    )
+
+    reloaded = CompanionContinuityService(storage_path=state_path)
+    assert reloaded.has_recent_presence_murmur("tiny wave from yunxi")
+    assert reloaded.presence_murmur_count == 2
+
+
 def test_capture_user_continuity_adds_open_thread_and_cue():
     continuity = CompanionContinuityService()
 
