@@ -87,6 +87,51 @@
 
 ---
 
+## [2026-04-16] 飞书日常模拟测试：主动发送、收发消息和工具确认闭环通过
+
+**状态**：已完成首轮飞书真实日常模拟测试。飞书现在可以作为日常模式唯一对话入口继续推进。
+
+### 测试结果
+
+- 飞书 live 主动发送：
+  - 普通沙箱首次运行因网络 socket 权限失败，外部权限重跑通过。
+  - `FEISHU_LIVE_TEST=1 python -m pytest -q tests\integration\test_daily_mode_feishu_live.py -m "real_llm and feishu_live"` -> 1 passed。
+- 飞书 daemon 普通文本收发：
+  - 启动参数：`--provider moonshot --feishu-enable --disable-tool-use --skip-desktop-mcp --embedding-provider lexical --tick-interval 9999 --run-seconds 180`。
+  - 飞书真实文本“云汐，收到吗”被 daemon 捕获：输出出现 `[飞书] 收到消息 from ...: 云汐，收到吗`。
+  - 说明 WebSocket 接收、线程回调、Runtime 调用和飞书回复路径进入真实链路。
+- 飞书工具确认闭环：
+  - 启动参数：`--provider moonshot --feishu-enable --embedding-provider lexical --tick-interval 9999 --run-seconds 240`。
+  - 用户通过飞书发送“帮我把 yunxi live clipboard test 复制到剪贴板”。
+  - daemon 捕获工具请求和后续“确认”。
+  - Desktop MCP 输出 `ListToolsRequest` 和 `CallToolRequest`。
+  - `Get-Clipboard` -> `yunxi live clipboard test`。
+  - 结论：飞书发起工具请求、云汐要求确认、飞书回复确认、Desktop MCP 执行写剪贴板真实闭环通过。
+
+### 期间发现并修复
+
+- `lark-oapi` WebSocket 使用模块级全局 event loop。前一次真实 daemon 接收测试报错：`This event loop is already running`。
+- 修复 `FeishuWebSocket`：
+  - WebSocket 线程内创建独立 event loop，并临时绑定到 `lark_oapi.ws.client.loop`。
+  - stop 时使用实例持有的 loop 做 `_disconnect()`。
+  - 关闭 loop 前取消 pending tasks，减少退出时 `Task was destroyed but it is pending` 告警。
+- daemon 新增 `--run-seconds`，用于 live 验收时有界运行并自动退出。
+- daemon 飞书回调增加收到消息的 console 打印，便于 live 验收定位。
+
+### 已验证
+
+- `python -m py_compile src\interfaces\feishu\websocket.py tests\unit\test_feishu_websocket.py src\apps\daemon\main.py` -> passed
+- `python -m pytest -q tests\unit\test_feishu_websocket.py tests\unit\test_daemon_healthcheck.py tests\unit\test_feishu_adapter.py` -> 13 passed
+- `python -m pytest -q tests\unit\test_feishu_websocket.py tests\unit\test_daemon_healthcheck.py tests\unit\test_feishu_adapter.py tests\integration\test_phase5_daily_mode.py` -> 18 passed
+- `FEISHU_LIVE_TEST=1 python -m pytest -q tests\integration\test_daily_mode_feishu_live.py -m "real_llm and feishu_live"` -> 1 passed
+
+### 剩余风险
+
+- `lark-oapi` 对 `im.chat.access_event.bot_p2p_chat_entered_v1` 和 `im.message.message_read_v1` 会输出 `processor not found`，目前不影响文本消息接收和回复，但后续可增加空 handler 降低噪声。
+- 本轮确认工具使用剪贴板写入作为样例；其他 Desktop MCP 工具仍需逐项 live 验收。
+
+---
+
 ## [2026-04-16] 阶段 4 完成：日常工具确认和错误人格化
 
 **状态**：已完成首版。阶段 4 目标是让 daily_mode 下工具请求不再直接变成安全错误，并避免把工程异常暴露给用户。

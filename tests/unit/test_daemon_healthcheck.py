@@ -41,6 +41,11 @@ class FakeRuntime:
 
 
 @pytest.mark.asyncio
+async def test_wait_for_shutdown_window_returns_after_bounded_time():
+    await daemon_main._wait_for_shutdown_window(0)
+
+
+@pytest.mark.asyncio
 async def test_deep_healthcheck_passes_with_fake_runtime(monkeypatch, tmp_path):
     events_path = tmp_path / "events.json"
     events_path.write_text(

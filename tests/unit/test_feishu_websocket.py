@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from types import SimpleNamespace
@@ -45,6 +46,46 @@ def test_feishu_websocket_stop_closes_client_and_joins_thread(monkeypatch):
 
     assert created[0].stopped.is_set()
     assert websocket._thread is None
+
+
+def test_feishu_websocket_uses_isolated_loop_when_global_loop_is_running(monkeypatch):
+    import interfaces.feishu.websocket as websocket_module
+
+    old_loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_old_loop() -> None:
+        asyncio.set_event_loop(old_loop)
+        ready.set()
+        old_loop.run_forever()
+
+    old_thread = threading.Thread(target=run_old_loop, daemon=True)
+    old_thread.start()
+    ready.wait(timeout=1)
+
+    class LoopCheckingClient(StoppableClient):
+        def start(self) -> None:
+            loop = websocket_module.lark_ws_client.loop
+            assert loop is not old_loop
+            loop.run_until_complete(asyncio.sleep(0))
+            super().start()
+
+    monkeypatch.setattr(websocket_module.lark_ws_client, "loop", old_loop)
+    monkeypatch.setattr("interfaces.feishu.websocket.lark.ws.Client", LoopCheckingClient)
+
+    websocket = FeishuWebSocket(
+        app_id="app-id",
+        app_secret="app-secret",
+        startup_wait_seconds=0,
+    )
+
+    try:
+        assert websocket.start()
+        websocket.stop(join_timeout=1)
+    finally:
+        old_loop.call_soon_threadsafe(old_loop.stop)
+        old_thread.join(timeout=1)
+        old_loop.close()
 
 
 def test_feishu_websocket_deduplicates_messages():

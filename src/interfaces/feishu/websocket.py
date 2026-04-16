@@ -45,6 +45,7 @@ class FeishuWebSocket:
         self._dedupe_ttl_seconds = max(1.0, dedupe_ttl_seconds)
         self._max_processed_messages = max(1, max_processed_messages)
         self._client: Optional[lark.ws.Client] = None
+        self._ws_loop: Optional[asyncio.AbstractEventLoop] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._processed_messages: OrderedDict[str, float] = OrderedDict()
@@ -124,6 +125,11 @@ class FeishuWebSocket:
 
             def run_ws():
                 self._running = True
+                old_loop = getattr(lark_ws_client, "loop", None)
+                ws_loop = asyncio.new_event_loop()
+                self._ws_loop = ws_loop
+                lark_ws_client.loop = ws_loop
+                asyncio.set_event_loop(ws_loop)
                 try:
                     self._client.start()
                 except Exception as e:
@@ -133,6 +139,15 @@ class FeishuWebSocket:
                         logger.info("飞书 WebSocket 线程已退出: %s", e)
                 finally:
                     self._running = False
+                    if getattr(lark_ws_client, "loop", None) is ws_loop:
+                        lark_ws_client.loop = old_loop
+                    try:
+                        if not ws_loop.is_closed():
+                            self._cancel_pending_tasks(ws_loop)
+                            ws_loop.close()
+                    except RuntimeError as exc:
+                        logger.warning("关闭飞书 WebSocket event loop 失败: %s", exc)
+                    self._ws_loop = None
 
             self._thread = threading.Thread(
                 target=run_ws,
@@ -162,6 +177,7 @@ class FeishuWebSocket:
                 logger.warning("飞书 WebSocket 线程未在 %.1f 秒内退出", join_timeout)
         self._thread = None
         self._client = None
+        self._ws_loop = None
         logger.info("飞书 WebSocket 已停止")
 
     def _stop_client(self, join_timeout: float) -> None:
@@ -179,7 +195,7 @@ class FeishuWebSocket:
                     logger.warning("调用飞书 WebSocket client.%s() 失败: %s", method_name, exc)
 
         disconnect = getattr(client, "_disconnect", None)
-        ws_loop = getattr(lark_ws_client, "loop", None)
+        ws_loop = self._ws_loop or getattr(lark_ws_client, "loop", None)
         if not callable(disconnect) or ws_loop is None or not ws_loop.is_running():
             return
 
@@ -193,6 +209,18 @@ class FeishuWebSocket:
                 ws_loop.call_soon_threadsafe(ws_loop.stop)
             except RuntimeError as exc:
                 logger.warning("停止飞书 WebSocket event loop 失败: %s", exc)
+
+    @staticmethod
+    def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
+        """Cancel pending tasks before closing the lark event loop."""
+        pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        if not pending:
+            return
+        for task in pending:
+            task.cancel()
+        loop.run_until_complete(
+            asyncio.gather(*pending, return_exceptions=True)
+        )
 
     def _mark_message_processed(self, message_id: str) -> bool:
         now = time.time()

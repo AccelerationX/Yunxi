@@ -44,6 +44,7 @@ class DaemonConfig:
     embedding_provider: Optional[str] = None
     feishu_enabled: bool = False
     deep_llm_ping: bool = True
+    run_seconds: Optional[float] = None
 
 
 @dataclass
@@ -311,6 +312,7 @@ async def run_daemon(config: DaemonConfig) -> None:
                 await proactive_cb(message)
 
             def on_feishu_message(user_id: str, chat_id: str, content: str) -> None:
+                print(f"[飞书] 收到消息 from {user_id}: {content[:50]}", flush=True)
                 adapter.on_feishu_message(user_id, chat_id, content)
 
             feishu_ws = FeishuWebSocket(on_message=on_feishu_message)
@@ -326,8 +328,7 @@ async def run_daemon(config: DaemonConfig) -> None:
             presence.start()
             print("[云汐] 日常模式已启动，可以通过飞书和我聊天了～", flush=True)
             try:
-                while True:
-                    await asyncio.sleep(3600)
+                await _wait_for_shutdown_window(config.run_seconds)
             finally:
                 await presence.stop()
                 feishu_ws.stop()
@@ -346,11 +347,19 @@ async def run_daemon(config: DaemonConfig) -> None:
     )
     presence.start()
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await _wait_for_shutdown_window(config.run_seconds)
     finally:
         await presence.stop()
         await close_runtime(runtime)
+
+
+async def _wait_for_shutdown_window(run_seconds: Optional[float]) -> None:
+    """Wait forever or for a bounded live-test window."""
+    if run_seconds is None:
+        while True:
+            await asyncio.sleep(3600)
+    else:
+        await asyncio.sleep(max(0.0, run_seconds))
 
 
 async def close_runtime(runtime: YunxiRuntime) -> None:
@@ -383,6 +392,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-desktop-mcp", action="store_true")
     parser.add_argument("--feishu-enable", action="store_true", help="启用飞书消息通道")
     parser.add_argument(
+        "--run-seconds",
+        type=float,
+        default=None,
+        help="有界运行秒数；用于 live 验收时自动退出",
+    )
+    parser.add_argument(
         "--embedding-provider",
         choices=["sentence_transformers", "lexical", "ollama"],
         default=None,
@@ -405,6 +420,7 @@ async def async_main() -> None:
         embedding_provider=args.embedding_provider,
         feishu_enabled=args.feishu_enable,
         deep_llm_ping=not args.skip_llm_ping,
+        run_seconds=args.run_seconds,
     )
     if args.healthcheck_deep:
         report = await run_deep_healthcheck(config)
