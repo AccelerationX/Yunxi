@@ -3,6 +3,10 @@
 from core.llm.adapter import LLMAdapter
 from core.llm.provider import (
     LLMConfig,
+    LLMProviderError,
+    LLMProviderHTTPError,
+    LLMProviderNetworkError,
+    LLMProviderResponseError,
     LLMResponse,
     Message,
     MessageRole,
@@ -15,6 +19,10 @@ from core.llm.provider import (
 __all__ = [
     "LLMAdapter",
     "LLMConfig",
+    "LLMProviderError",
+    "LLMProviderHTTPError",
+    "LLMProviderNetworkError",
+    "LLMProviderResponseError",
     "LLMResponse",
     "Message",
     "MessageRole",

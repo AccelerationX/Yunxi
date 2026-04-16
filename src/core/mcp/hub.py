@@ -3,8 +3,10 @@
 整合工具发现、DAG 规划、安全校验、执行与审计，作为云汐 3.0 日常模式的统一工具调用入口。
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from core.mcp.client import MCPClient
 from core.mcp.planner import DAGPlanner
@@ -29,6 +31,17 @@ class ToolChainResult:
     security_decisions: List[Dict[str, Any]]
 
 
+@dataclass
+class PendingToolConfirmation:
+    """A tool call waiting for user confirmation."""
+
+    confirmation_id: str
+    plan: ToolCallPlan
+    reason: str
+    inferred_intent: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
+
+
 class MCPHub:
     """
     云汐 3.0 的 MCP 工具中枢。
@@ -51,6 +64,7 @@ class MCPHub:
         self.security = security
         self.audit = audit
         self._initialized = False
+        self._pending_confirmations: Dict[str, PendingToolConfirmation] = {}
 
     async def initialize(self, server_configs: List[Dict[str, Any]]) -> None:
         """
@@ -130,6 +144,47 @@ class MCPHub:
             return chain_result.results[0]
         return {"error": "无返回结果", "is_error": True}
 
+    def list_pending_confirmations(self) -> List[PendingToolConfirmation]:
+        """Return tool confirmations waiting for user approval."""
+        return list(self._pending_confirmations.values())
+
+    def has_pending_confirmations(self) -> bool:
+        """Return whether any tool call is waiting for confirmation."""
+        return bool(self._pending_confirmations)
+
+    async def approve_latest_pending(
+        self,
+        context: Any,
+    ) -> ToolChainResult:
+        """Approve and execute the newest pending tool confirmation."""
+        if not self._pending_confirmations:
+            return ToolChainResult(
+                results=[],
+                audit_log_id="",
+                security_decisions=[],
+            )
+        latest = max(
+            self._pending_confirmations.values(),
+            key=lambda item: item.created_at,
+        )
+        self._pending_confirmations.pop(latest.confirmation_id, None)
+        return await self._execute_plans(
+            [latest.plan],
+            context,
+            inferred_intent=latest.inferred_intent,
+            confirmed_call_ids={latest.plan.call_id},
+        )
+
+    def reject_latest_pending(self) -> Optional[PendingToolConfirmation]:
+        """Reject and remove the newest pending tool confirmation."""
+        if not self._pending_confirmations:
+            return None
+        latest = max(
+            self._pending_confirmations.values(),
+            key=lambda item: item.created_at,
+        )
+        return self._pending_confirmations.pop(latest.confirmation_id, None)
+
     def list_available_tool_names(self) -> List[str]:
         """返回当前已发现并可路由的 MCP 工具名。"""
         return self.client.list_tool_names()
@@ -139,9 +194,11 @@ class MCPHub:
         plans: List[ToolCallPlan],
         context: Any,
         inferred_intent: Optional[str] = None,
+        confirmed_call_ids: Optional[set[str]] = None,
     ) -> ToolChainResult:
         """内部执行逻辑：拓扑排序 → 安全校验 → 执行 → 审计。"""
         ordered_plans = self.planner.topological_sort(plans)
+        confirmed = confirmed_call_ids or set()
 
         results: List[Dict[str, Any]] = []
         security_decisions: List[Dict[str, Any]] = []
@@ -162,16 +219,29 @@ class MCPHub:
                 })
                 continue
 
-            if decision.action == "ask":
+            if decision.action == "ask" and step.call_id not in confirmed:
+                confirmation = self._create_pending_confirmation(
+                    step,
+                    reason=decision.reason,
+                    inferred_intent=inferred_intent,
+                )
                 results.append({
                     "call_id": step.call_id,
-                    "error": f"需要用户确认：{decision.reason}",
-                    "is_error": True,
+                    "content": f"需要用户确认：{decision.reason}",
+                    "is_error": False,
+                    "pending_confirmation": True,
+                    "confirmation_id": confirmation.confirmation_id,
                 })
                 continue
 
             if not self.client.has_tool(step.tool_name):
-                raise ValueError(f"未知工具: {step.tool_name}")
+                results.append({
+                    "call_id": step.call_id,
+                    "error": f"未知工具：{step.tool_name}",
+                    "is_error": True,
+                    "error_type": "unknown_tool",
+                })
+                continue
 
             try:
                 raw_result = await self.client.call_tool(
@@ -203,6 +273,22 @@ class MCPHub:
             audit_log_id=audit_log_id,
             security_decisions=security_decisions,
         )
+
+    def _create_pending_confirmation(
+        self,
+        plan: ToolCallPlan,
+        *,
+        reason: str,
+        inferred_intent: Optional[str],
+    ) -> PendingToolConfirmation:
+        confirmation = PendingToolConfirmation(
+            confirmation_id=f"confirm_{uuid4().hex[:12]}",
+            plan=plan,
+            reason=reason,
+            inferred_intent=inferred_intent,
+        )
+        self._pending_confirmations[confirmation.confirmation_id] = confirmation
+        return confirmation
 
     def _normalize_result(self, raw: Any) -> str:
         """将 MCP 返回结果统一归一化为字符串。"""

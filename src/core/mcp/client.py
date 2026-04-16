@@ -4,6 +4,7 @@
 所有 Server 生命周期由本类统一管理。
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -31,9 +32,10 @@ class MCPClient:
     - 按工具名路由到对应的 Server 执行调用
     """
 
-    def __init__(self):
+    def __init__(self, timeout_seconds: float = 30.0):
         self._connections: Dict[str, ServerConnection] = {}
         self._tool_to_server: Dict[str, str] = {}
+        self.timeout_seconds = timeout_seconds
 
     async def connect_server(
         self,
@@ -61,13 +63,22 @@ class MCPClient:
         )
 
         stdio_cm = stdio_client(params)
-        read, write = await stdio_cm.__aenter__()
+        read, write = await asyncio.wait_for(
+            stdio_cm.__aenter__(),
+            timeout=self.timeout_seconds,
+        )
 
         session_cm = ClientSession(read, write)
-        session = await session_cm.__aenter__()
-        await session.initialize()
+        session = await asyncio.wait_for(
+            session_cm.__aenter__(),
+            timeout=self.timeout_seconds,
+        )
+        await asyncio.wait_for(session.initialize(), timeout=self.timeout_seconds)
 
-        tools_result = await session.list_tools()
+        tools_result = await asyncio.wait_for(
+            session.list_tools(),
+            timeout=self.timeout_seconds,
+        )
         tools = tools_result.tools
 
         self._connections[name] = ServerConnection(
@@ -136,7 +147,10 @@ class MCPClient:
             raise ValueError(f"未知工具: {tool_name}")
 
         conn = self._connections[server_name]
-        result = await conn.session.call_tool(tool_name, arguments=arguments)
+        result = await asyncio.wait_for(
+            conn.session.call_tool(tool_name, arguments=arguments),
+            timeout=self.timeout_seconds,
+        )
         return result
 
     def has_tool(self, tool_name: str) -> bool:

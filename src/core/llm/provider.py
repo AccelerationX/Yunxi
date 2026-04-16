@@ -7,11 +7,40 @@
 from __future__ import annotations
 
 import json as json_module
+import logging
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
+
+
+class LLMProviderError(RuntimeError):
+    """Base class for provider failures."""
+
+    error_type = "provider_error"
+
+
+class LLMProviderNetworkError(LLMProviderError):
+    """Network-level provider failure."""
+
+    error_type = "network_error"
+
+
+class LLMProviderHTTPError(LLMProviderError):
+    """HTTP-level provider failure."""
+
+    error_type = "http_error"
+
+
+class LLMProviderResponseError(LLMProviderError):
+    """Provider returned malformed or empty data."""
+
+    error_type = "response_error"
 
 
 class MessageRole(Enum):
@@ -151,13 +180,12 @@ class OpenAICompatibleProvider:
         if self.provider_name == "minimax":
             endpoint = "/chatcompletion_v2"
 
-        response = await self._client.post(endpoint, json=payload)
-        response.raise_for_status()
+        response = await self._post_with_retries(endpoint, payload)
         data = response.json()
 
         choices = data.get("choices")
         if not choices:
-            raise RuntimeError(f"LLM provider returned no choices: {data}")
+            raise LLMProviderResponseError(f"LLM provider returned no choices: {data}")
         choice = choices[0]
         message = choice.get("message", {}) or {}
 
@@ -221,8 +249,7 @@ class OpenAICompatibleProvider:
                 for tool in tools
             ]
 
-        response = await self._client.post("/api/chat", json=payload)
-        response.raise_for_status()
+        response = await self._post_with_retries("/api/chat", payload)
         data = response.json()
         message = data.get("message", {}) or {}
         tool_calls = None
@@ -244,6 +271,49 @@ class OpenAICompatibleProvider:
             finish_reason=data.get("done_reason"),
             model=data.get("model"),
         )
+
+    async def _post_with_retries(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+    ) -> httpx.Response:
+        if self._client is None:
+            await self.initialize()
+        last_error: Optional[Exception] = None
+        max_retries = max(1, self.config.max_retries)
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await self._client.post(endpoint, json=payload)
+                response.raise_for_status()
+                return response
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                error_cls = LLMProviderNetworkError
+            except httpx.TransportError as exc:
+                last_error = exc
+                error_cls = LLMProviderNetworkError
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status = exc.response.status_code
+                error_cls = LLMProviderHTTPError
+                if status < 500 and status not in (408, 429):
+                    raise error_cls(f"LLM provider HTTP {status}") from exc
+
+            if attempt < max_retries:
+                delay = min(2.0, 0.4 * attempt)
+                logger.warning(
+                    "LLM provider request failed (%s/%s), retrying in %.1fs: %s",
+                    attempt,
+                    max_retries,
+                    delay,
+                    last_error,
+                )
+                await asyncio.sleep(delay)
+
+        if isinstance(last_error, httpx.HTTPStatusError):
+            status = last_error.response.status_code
+            raise LLMProviderHTTPError(f"LLM provider HTTP {status}") from last_error
+        raise LLMProviderNetworkError("LLM provider network request failed") from last_error
 
     async def stream(
         self,

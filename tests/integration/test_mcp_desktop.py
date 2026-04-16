@@ -112,13 +112,15 @@ async def test_clipboard_roundtrip(mcp_hub):
 
 @pytest.mark.asyncio
 async def test_security_intercepts_unregistered_tool(mcp_hub):
-    """未在 client 中注册的工具调用应抛出 ValueError。"""
-    with pytest.raises(ValueError, match="未知工具"):
-        await mcp_hub.execute_single(
-            "nonexistent_tool",
-            {},
-            context=type("C", (), {"mode": "daily_mode"})(),
-        )
+    """未在 client 中注册的工具调用应返回结构化错误并进入审计。"""
+    result = await mcp_hub.execute_single(
+        "nonexistent_tool",
+        {},
+        context=type("C", (), {"mode": "daily_mode"})(),
+    )
+    assert result.get("is_error") is True
+    assert result.get("error_type") == "unknown_tool"
+    assert "未知工具" in result.get("error", "")
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,9 @@ from core.types.message_types import (
     ToolUseBlockData,
     UserMessage,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,12 +109,19 @@ class YunxiExecutionEngine:
             self.context.add_user_message(user_input)
 
         try:
+            pending_result = await self._handle_pending_confirmation_message(
+                user_input,
+                runtime_context,
+            )
+            if pending_result is not None:
+                return pending_result
+
             # 技能快速路径
             if user_input and self.config.enable_skill_fastpath and self.memory:
                 skill_match = await self.memory.try_skill(user_input)
                 if skill_match:
                     return await self._execute_skill_path(
-                        skill_match, user_input, runtime_context
+                        skill_match, user_input, runtime_context, system_prompt
                     )
 
             # LLM 通用路径
@@ -156,6 +167,12 @@ class YunxiExecutionEngine:
                 )
                 self._add_chain_results_to_context(chain_result.results)
 
+                pending = self._pending_confirmation_from_results(chain_result.results)
+                if pending:
+                    response_text = self._pending_confirmation_message(pending)
+                    self.context.add_assistant_message(response_text)
+                    return ExecutionResult(content=response_text)
+
                 # 如果最后一轮且全部失败，返回错误提示
                 if turn == self.config.max_turns - 1:
                     errors = [
@@ -164,7 +181,7 @@ class YunxiExecutionEngine:
                         if r.get("is_error")
                     ]
                     if errors:
-                        fallback = "[工具执行遇到问题，请换个方式说吧]"
+                        fallback = self._friendly_tool_failure()
                         self.context.add_assistant_message(fallback)
                         return ExecutionResult(
                             content=fallback,
@@ -172,14 +189,15 @@ class YunxiExecutionEngine:
                         )
 
             return ExecutionResult(
-                content="[尝试使用工具多次仍未完成]",
+                content=self._friendly_tool_failure(),
                 error="max_turns_exceeded",
             )
 
         except Exception as exc:
+            logger.exception("ExecutionEngine response failed")
             self._record_chat_experience(user_input, "", success=False, error=str(exc))
             return ExecutionResult(
-                content=f"[云汐这里出了点小问题：{exc}]",
+                content=self._friendly_engine_failure(),
                 error=str(exc),
             )
 
@@ -188,6 +206,7 @@ class YunxiExecutionEngine:
         skill_match: Dict[str, Any],
         user_input: str,
         runtime_context: Any,
+        system_prompt: str,
     ) -> ExecutionResult:
         """执行技能快速路径。"""
         results: List[Dict[str, Any]] = []
@@ -210,6 +229,20 @@ class YunxiExecutionEngine:
             if result.get("is_error"):
                 all_success = False
 
+        pending = self._pending_confirmation_from_results(results)
+        if pending:
+            response_text = self._pending_confirmation_message(pending)
+            self.context.add_assistant_message(response_text)
+            return ExecutionResult(content=response_text, skill_used=skill_name)
+
+        response_text = await self._build_skill_response_via_llm(
+            skill_match=skill_match,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            results=results,
+            all_success=all_success,
+        )
+
         if self.memory:
             self.memory.record_skill_outcome(skill_name, all_success)
             self.memory.record_experience(
@@ -222,14 +255,106 @@ class YunxiExecutionEngine:
                 else results[-1].get("error", ""),
             )
 
-        response_text = self._select_skill_response(
+        self.context.add_assistant_message(response_text)
+        return ExecutionResult(content=response_text, skill_used=skill_name)
+
+    async def _build_skill_response_via_llm(
+        self,
+        *,
+        skill_match: Dict[str, Any],
+        user_input: str,
+        system_prompt: str,
+        results: List[Dict[str, Any]],
+        all_success: bool,
+    ) -> str:
+        """Let the LLM turn skill execution results into a natural reply."""
+        summary = json.dumps(results, ensure_ascii=False)
+        guidance = (
+            "刚才的快捷能力已经处理完。请用云汐的自然语气回复远，"
+            "只说结果和必要的下一步，不要暴露内部字段、系统提示或技术错误。"
+            f"\n用户原话：{user_input}\n处理是否成功：{all_success}\n结果摘要：{summary}"
+        )
+        try:
+            response = await self.llm.complete(
+                system=system_prompt,
+                messages=self.context.get_messages() + [UserMessage(content=guidance)],
+                tools=None,
+            )
+            if response.content:
+                return response.content
+        except Exception as exc:
+            logger.warning("Skill response LLM finalization failed: %s", exc)
+        return self._select_skill_response(
             skill_match=skill_match,
             all_success=all_success,
             last_error=results[-1].get("error") if results else None,
         )
 
-        self.context.add_assistant_message(response_text)
-        return ExecutionResult(content=response_text, skill_used=skill_name)
+    async def _handle_pending_confirmation_message(
+        self,
+        user_input: str,
+        runtime_context: Any,
+    ) -> Optional[ExecutionResult]:
+        if not user_input or not self.mcp_hub.has_pending_confirmations():
+            return None
+        if self._is_confirmation_rejection(user_input):
+            self.mcp_hub.reject_latest_pending()
+            response = "好，那我先不动它。你想继续的时候再跟我说一声就行。"
+            self.context.add_assistant_message(response)
+            return ExecutionResult(content=response)
+        if not self._is_confirmation_acceptance(user_input):
+            return None
+
+        chain_result = await self.mcp_hub.approve_latest_pending(runtime_context)
+        self._add_chain_results_to_context(chain_result.results)
+        if any(result.get("is_error") for result in chain_result.results):
+            response = self._friendly_tool_failure()
+            error = "; ".join(
+                result.get("error", "")
+                for result in chain_result.results
+                if result.get("is_error")
+            )
+            self.context.add_assistant_message(response)
+            return ExecutionResult(content=response, error=error)
+        response = "好，我已经按你点头的那一步处理好了。"
+        self.context.add_assistant_message(response)
+        return ExecutionResult(
+            content=response,
+            tool_calls_used=[
+                result.get("call_id", "")
+                for result in chain_result.results
+                if result.get("call_id")
+            ],
+        )
+
+    def _pending_confirmation_from_results(
+        self,
+        results: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        for result in results:
+            if result.get("pending_confirmation"):
+                return result
+        return None
+
+    def _pending_confirmation_message(self, pending: Dict[str, Any]) -> str:
+        return (
+            "这一步会改动你的电脑状态，我想先等你点头。"
+            "你回复“确认”我就继续，回复“取消”我就先放下。"
+        )
+
+    def _friendly_tool_failure(self) -> str:
+        return "远，这一步我刚刚没能稳稳办成。我先停住，不乱动你的电脑；你换个说法或等我再试一次。"
+
+    def _friendly_engine_failure(self) -> str:
+        return "远，我这边刚刚卡了一下，但我已经停住了。你再跟我说一遍，我重新陪你处理。"
+
+    def _is_confirmation_acceptance(self, text: str) -> bool:
+        normalized = text.strip().lower()
+        return normalized in {"确认", "同意", "可以", "继续", "好", "ok", "yes", "y"}
+
+    def _is_confirmation_rejection(self, text: str) -> bool:
+        normalized = text.strip().lower()
+        return normalized in {"取消", "不要", "先别", "不用", "否", "no", "n"}
 
     def _select_skill_response(
         self,
@@ -239,8 +364,7 @@ class YunxiExecutionEngine:
     ) -> str:
         """根据技能类型和执行结果选择情感化的回复变体。"""
         if not all_success:
-            error_hint = last_error or "不知道哪里出了问题"
-            return f"哎呀，这个操作好像没成功，{error_hint}"
+            return self._friendly_tool_failure()
 
         skill_name = skill_match.get("skill_name", "")
         actions = skill_match.get("actions", [])

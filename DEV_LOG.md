@@ -7,6 +7,52 @@
 
 ---
 
+## [2026-04-16] 阶段 4 完成：日常工具确认和错误人格化
+
+**状态**：已完成首版。阶段 4 目标是让 daily_mode 下工具请求不再直接变成安全错误，并避免把工程异常暴露给用户。
+
+### 完成内容
+
+- 新增 pending tool confirmation 最小闭环：
+  - `MCPHub` 在安全策略返回 `ask` 时创建 `PendingToolConfirmation`，不直接执行工具。
+  - `YunxiExecutionEngine` 会自然告知“这一步需要你点头”，用户回复“确认/同意/可以/继续/ok”等后继续执行最新 pending 工具。
+  - 用户回复“取消/不要/先别”等会放弃 pending 工具。
+- 工具失败和 Engine 异常用户可见人格化：
+  - 移除用户可见的 `[云汐这里出了点小问题：...]`、`[工具执行遇到问题...]`、`[尝试使用工具多次仍未完成]`。
+  - 技术细节保留在 `ExecutionResult.error` 和日志，不直接进入回复文本。
+- MCP 失败结构化：
+  - 未知工具不再 raise 绕过审计，改为 `error_type="unknown_tool"` 的结构化结果。
+  - `MCPClient` 对 connect / initialize / list_tools / call_tool 增加 `asyncio.wait_for()` timeout。
+- LLM provider 增加 typed errors 和重试：
+  - 新增 `LLMProviderNetworkError`、`LLMProviderHTTPError`、`LLMProviderResponseError`。
+  - provider 请求按 `max_retries` 重试，网络/超时/可重试 HTTP 错误进入结构化异常。
+- 技能快速路径不再直接固定话术收尾：
+  - 快捷技能执行后会把结果交给 LLM 做最终自然表达。
+  - 如果最终表达失败，才回退到人格化的保守回复。
+
+### 已验证
+
+- `python -m py_compile src\core\execution\engine.py src\core\mcp\hub.py src\core\mcp\client.py src\core\llm\provider.py src\core\llm\__init__.py tests\unit\test_mcp_hub_stage4.py tests\unit\test_execution_engine_stage4.py tests\unit\test_llm_provider_errors.py tests\integration\test_mcp_desktop.py` -> passed
+- `python -m pytest -q tests\unit\test_mcp_hub_stage4.py tests\unit\test_execution_engine_stage4.py tests\unit\test_llm_provider_errors.py tests\unit\test_execution_engine.py` -> 12 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 92 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 30 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot` -> 2 passed（真实 Moonshot，需要联网）
+- `python -m pytest -q tests\integration\test_moonshot_cloud_matrix.py -m real_llm` -> 6 passed（真实 Moonshot，需要联网）
+- `python -m pytest -q tests\integration\test_mcp_desktop.py -m desktop_mcp` -> 普通沙箱因 Windows named pipe 权限失败；外部权限重跑 5 passed
+
+### 下一步
+
+进入阶段 5：真实日常入口、Tray/WebUI 和分层感知。
+
+优先处理：
+1. Perception provider 分层，基础感知、慢速外部感知、可选隐私感知分别带 timeout 和降级。
+2. Tray/WebUI 接入 Runtime 状态和 pending confirmation。
+3. 常驻 daemon 增加深度 healthcheck。
+4. 飞书 live 或 Tray 至少一个真实入口完成 Layer 3 验收。
+
+---
+
 ## [2026-04-16] 阶段 3 完成：主动预算、长期关系记忆和连续性沉淀
 
 **状态**：已完成首版。阶段 3 目标是让云汐的主动性和长期关系状态不再只依赖进程内临时变量。
@@ -244,14 +290,14 @@
 
 **日期**：2026-04-16  
 **阶段**：Phase 5 日常模式硬化中，尚不应进入 Phase 6 工厂模式。  
-**本次动作**：阶段 3 已完成，下一步进入日常工具确认和用户可见错误人格化。
+**本次动作**：阶段 4 已完成，下一步进入真实日常入口、Tray/WebUI 和分层感知。
 
 ### 当前结论
 
 - Phase 0-5 的骨架已经基本搭好：Runtime、PromptBuilder、LLMAdapter、MCPHub、Memory、HeartLake、Initiative、Presence、daemon、飞书通道、Ollama/Moonshot 接入均已有实现。
 - yunxi2.0 的关键资产已经迁入一部分：人格 profile、用户关系 profile、生活事件库、三层主动事件系统、表达上下文、continuity/open_threads。
-- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程；阶段 3 已补齐主动预算跨日重置、关系记忆持久化、连续性自动沉淀和主动事件情绪影响。
-- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真和 Moonshot 旧矩阵已经通过；剩余阻塞集中在日常工具确认闭环、用户可见错误人格化、provider 重试和 MCP timeout/结构化失败。
+- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程；阶段 3 已补齐主动预算跨日重置、关系记忆持久化、连续性自动沉淀和主动事件情绪影响；阶段 4 已完成工具确认最小闭环、错误人格化、provider 重试和 MCP timeout/结构化失败。
+- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真、Moonshot 旧矩阵和 Desktop MCP 集成均已通过；剩余阻塞集中在真实入口体验、Tray/WebUI、分层感知和深度 healthcheck。
 
 ### 进入工厂模式前的硬门槛
 
@@ -465,6 +511,8 @@
 - 飞书/Tray/WebUI 至少一个入口能完成确认。
 - LLM 回复要自然表达“这个操作需要你点头”，不能暴露安全策略字段。
 
+当前状态：阶段 4 已完成最小闭环。`MCPHub` 会为 `ask` 生成 pending confirmation，`YunxiExecutionEngine` 支持“确认/取消”继续或放弃最新 pending 工具；回复采用自然表达，不暴露安全策略字段。飞书/Tray 的可视化确认入口留到阶段 5 接入。
+
 ### P0-07：长期关系记忆还不是真正的长期记忆
 
 文件：`src/domains/memory/manager.py`、`src/core/initiative/continuity.py`
@@ -541,6 +589,8 @@
 - 技术细节进入日志，不直接进入用户回复。
 - 测试覆盖 LLM 异常、工具异常、安全 ask、未知工具。
 
+当前状态：阶段 4 已修复。Engine 不再返回括号化工程错误；LLM 异常、工具失败、max turns、确认取消和未知工具均有自然回复或结构化内部错误，技术细节只进入 error/log/audit。
+
 ---
 
 ## P1：日常模式质量问题
@@ -612,6 +662,8 @@
 - 工具执行结果应回到 LLM 做最终自然表达，或至少把 HeartLake/relationship/context 纳入回复选择。
 - 快速路径只负责执行，不负责最终人格化表达。
 
+当前状态：阶段 4 已修复首版。技能快速路径执行结果会交给 LLM 做最终自然表达；最终表达失败时才使用人格化保守回退。
+
 ### P1-05：PromptBuilder 只拼接，不压缩
 
 文件：`src/core/prompt_builder.py`
@@ -680,6 +732,8 @@
 - 使用 max_retries、指数退避、可观测日志。
 - Ollama stream 单独实现或明确禁用。
 
+当前状态：阶段 4 已修复主路径。provider 新增网络/HTTP/响应三类结构化错误，并对 complete 请求按 `max_retries` 重试；stream 路径仍留作后续细化。
+
 ### P1-09：MCPClient 缺少调用超时
 
 文件：`src/core/mcp/client.py`、`src/core/mcp/hub.py`
@@ -695,6 +749,8 @@
 修复方向：
 - 对 connect/list_tools/call_tool 增加 timeout。
 - 未知工具也应转成结构化 ToolChainResult 并写审计。
+
+当前状态：阶段 4 已修复。`MCPClient` 对 connect/initialize/list_tools/call_tool 增加 timeout；未知工具返回 `error_type="unknown_tool"` 的结构化结果并进入审计，不再直接 raise。
 
 ### P1-10：桌面工具有安全和准确性缺口
 
