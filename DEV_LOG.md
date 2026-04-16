@@ -1,786 +1,788 @@
 # 云汐 3.0 开发日志
 
-> **用途**：记录当前开发状态、阻塞问题、下一步计划。  
-> **读取时机**：每次新对话开始时，必须首先阅读本文件最新内容。  
-> **更新时机**：每完成一个显著里程碑、遇到阻塞、或转换 Phase 时，必须更新本文件。  
-> **更新方式**：使用工具直接修改本文件，在顶部追加新的日志条目。
+> **用途**：记录当前开发状态、阻塞问题、重要决策和下一步计划。  
+> **读取时机**：每次新对话开始时，必须先阅读本文件。  
+> **更新原则**：只保留重要里程碑、真实验证结果、阻塞问题和阶段切换依据；删除低价值流水快照。  
+> **核心验收标准**：云汐首先是住在电脑里的亲密伴侣；工具能力只能作为延伸，不能让云汐退化成高级脚本执行程序。
 
 ---
 
-### [2026-04-16] 代码复审与 P0 问题修复：主动性/技能快速路径/技能学习调度/app_launch 重试
+## [2026-04-16] 新增：日常模式仿真验收框架
 
-**状态**：已完成。本次复审系统核查了"全阶段设计一致性复审"中记录的 23 项问题，确认其中 7 项已在此前修复，剩余 17 项仍存在。本轮聚焦修复了 4 个 P0 问题。
+**状态**：已完成首版搭建。该框架用于在进入工厂模式前，以真实日常使用方式验收云汐是否像“住在电脑里的女友”，而不是只验证函数调用是否成功。
 
----
+### 新增/更新文件
 
-**复审结论（2026-04-16）**：
+- `docs/design/CONVERSATION_TESTER_DESIGN.md`：升级为 v2.0“日常模式仿真验收框架设计”，明确分层测试、真实 LLM、飞书 live、状态注入、行为检查和完成门槛。
+- `tests/integration/daily_mode_scenario_tester.py`：新增 `DailyModeScenarioTester`，支持构建隔离 Runtime、注入记忆/情绪/感知/open thread、触发主动 tick、捕获通道消息、记录真实 LLM system prompt、执行行为检查。
+- `tests/integration/test_daily_mode_scenario_tester.py`：新增框架自测，覆盖记忆注入、主动事件发送到 capture channel、吃醋状态变化、内部字段/工具化表达检查。
+- `tests/integration/test_daily_mode_full_simulation_real_llm.py`：新增真实 LLM 日常仿真矩阵，覆盖本地 Ollama 和 Moonshot 两组，模拟记忆、情绪、陪伴、主动事件、open thread 和反工具化。
+- `tests/integration/test_daily_mode_feishu_live.py`：新增飞书 live 主动发送测试，默认跳过，只有 `FEISHU_LIVE_TEST=1` 时真实发送消息。
+- `pytest.ini`：新增 `feishu_live` marker。
 
-通过逐项核查代码，23 项问题中：
-- 7 项已在之前修复（Hardening 第一批及后续迭代）
-- 17 项仍存在（详见下方清单）
-- 4 个 P0 问题本次已修复
+### 已验证
 
-**已在此前修复的问题**：
-1. Runtime 不再读取 `mcp_hub.client._connections` 私有字段 ✅
-2. Continuity 持久化 + open_threads ✅（Hardening 第一批）
-3. 多维主动决策（InitiativeEngine 多维评分）✅（P0-D 完成）
-4. PatternMiner 离线降级 ✅（Hardening 第一批）
-5. 飞书消息通道集成 ✅
-6. httpx timeout 配置 ✅
-7. MCP 公开工具列表接口 ✅
+- `python -m py_compile tests\integration\daily_mode_scenario_tester.py tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_daily_mode_full_simulation_real_llm.py tests\integration\test_daily_mode_feishu_live.py` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py` -> 4 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py -m "not real_llm and not desktop_mcp"` -> 12 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
 
-**仍存在的问题（17 项）**：
-- Phase 0：核心接口仍大量使用 `Any` / 裸 `Dict`
-- Phase 0：`engine.py` 异常处理缺少结构化日志
-- Phase 1：缺少 file/bash/browser MCP Server
-- Phase 1：SecurityManager 无参数级危险识别
-- Phase 1：Desktop Server 宽泛异常返回字符串
-- Phase 1：`UIADriver.launch_application()` 的 `shell=True`
-- Phase 1：`app_launch_ui` 无重试/降级
-- Phase 2：PromptBuilder 无结构化压缩
-- Phase 2：`YunxiExecutionEngine` 错误恢复模板化
-- Phase 2：ConversationTester 真实 LLM 覆盖不足
-- Phase 3：`SkillDistiller` / `ParamFiller` 靠正则硬编码
-- Phase 3：技能快速路径固定文案（本次已修复）
-- Phase 3：`run_skill_learning_cycle()` 未被调度（本次已修复）
-- Phase 4：`HeartLake` 仍是 if/elif 阈值
-- Phase 4：`HeartLakeUpdater` 硬编码关键词（本次已修复）
-- Phase 5：Tray/WebUI 不是真实服务
-- Phase 5：daemon 长时间稳定性测试未完成
+### 重要发现
+
+- 首次运行 Ollama 真实仿真时，框架错误地回退到了 `nomic-embed-text` embedding 模型，导致 `/api/chat` 400。已修复模型选择策略：当 `.env` 中配置的 `OLLAMA_MODEL` 不可用时，优先选择非 embedding 的聊天模型。
+- 真实 Moonshot 组和飞书 live 组已经搭建，但未默认运行。Moonshot 需要可用外网/API；飞书 live 需要 `FEISHU_LIVE_TEST=1`，避免测试时误发消息。
+
+### 后续必须补齐
+
+1. 修复旧 `test_moonshot_cloud_matrix.py` 空事件库问题，并迁移到 `DailyModeScenarioTester`。
+2. 修复 daemon stability 测试挂起问题，并复用新的 static perception provider。
+3. 新增重启后记忆持久化测试，目前预计会暴露 `MemoryManager` 长期关系记忆不足。
+4. 新增主动预算跨日重置测试，目前预计会暴露 `recent_proactive_count` 不按日期重置。
+5. 新增飞书线程回调测试，目前预计会暴露 `asyncio.create_task()` 在线程中无 event loop 的问题。
 
 ---
 
-**本次修复的 4 个 P0 问题**：
+## 当前总状态
 
-**1. HeartLakeUpdater 硬编码关键词触发吃醋**
+**日期**：2026-04-16  
+**阶段**：Phase 5 日常模式硬化中，尚不应进入 Phase 6 工厂模式。  
+**本次动作**：清理旧开发日志，记录日常模式整体大审查结果。  
 
-文件：`src/core/cognition/heart_lake/updater.py`
+### 当前结论
 
-修复：
-- 删除硬编码的 `("claude", "其他ai", "别的ai")` 关键词列表
-- 新增 `_JealousyAppraisal` 类，采用多模式语义匹配：
-  - 直接提及其他 AI（claude/gpt/gemini/copilot/kimi/豆包/通义/文心/智谱等）
-  - 比较性表达（"比...更/还/比较"）
-  - 正面评价 + 其他 AI 同时出现
-- 新增 `AppraisalRule` dataclass，为未来更多情感评估规则预留扩展性
-- 修复 regex 缺少括号编译错误（`人工智能|AI|大模型)` → `\b(人工智能|AI|大模型)`）
+- Phase 0-5 的骨架已经基本搭好：Runtime、PromptBuilder、LLMAdapter、MCPHub、Memory、HeartLake、Initiative、Presence、daemon、飞书通道、Ollama/Moonshot 接入均已有实现。
+- yunxi2.0 的关键资产已经迁入一部分：人格 profile、用户关系 profile、生活事件库、三层主动事件系统、表达上下文、continuity/open_threads。
+- 日常模式仍不能标记为完成。当前实现能跑出基础对话，但还没有达到“稳定常驻、真实主动、有长期关系记忆、入口可靠、真实 LLM 验收完整通过”的标准。
+- 旧日志中“P0-E 全部完成”的表述已作废。真实云端矩阵和 daemon 稳定性测试当前没有通过。
 
-**2. 技能快速路径固定文案**
+### 进入工厂模式前的硬门槛
+
+1. 日常模式真实 LLM 验收必须同时覆盖本地 Ollama 和云端 Moonshot，并实际跑通。
+2. 飞书或其他真实入口必须能稳定接收用户消息、调用 Runtime、返回回复、发送主动消息。
+3. Presence 长期运行不能卡死，daemon 稳定性测试必须可信。
+4. 主动性预算、冷却、未回复克制必须按真实时间持久化，而不是进程内临时变量。
+5. 记忆系统必须能沉淀“远”和云汐之间的重要事实，而不只是当前进程内列表。
+6. 日常工具必须有真实确认通道，否则 daily_mode 下 WRITE/EXECUTE 工具不可用。
+7. 云汐回复不能暴露工程错误、系统字段、工具失败模板或客服腔。
+
+---
+
+## 重要里程碑保留
+
+### Phase 0：代码准则与项目骨架
+
+- 已建立 `CODE_QUALITY_GUIDELINES.md`。
+- 已建立 `src/`、`tests/`、`docs/design/`、`data/`、`logs/` 基础结构。
+- 当前仍存在违反准则的问题：核心接口中 `Any` / `Dict` 过多，宽泛异常过多，部分同步阻塞 IO 混入异步链路。
+
+### Phase 1：MCP 与桌面工具骨架
+
+- 已实现 `MCPClient`、`MCPHub`、`DAGPlanner`、`SecurityManager`、`AuditLogger`。
+- 已实现 Desktop MCP Server：截图、剪贴板、通知、启动应用、窗口聚焦、窗口最小化。
+- 当前仍缺少 file/bash/browser MCP Server。
+- 日常模式的安全确认链路未闭合：`ask` 当前只是变成工具错误，没有真实向用户确认。
+
+### Phase 2：执行引擎与 PromptBuilder
+
+- 已实现 `YunxiExecutionEngine`、`ConversationContext`、`ExecutionResult`。
+- 已实现 `YunxiPromptBuilder`，能注入人格、关系、情感、感知、记忆、失败经验、连续性和工具列表。
+- 当前问题：错误恢复仍模板化；Prompt 没有结构化压缩；工具失败会出现工程化回复。
+
+### Phase 3：记忆与技能学习
+
+- 已实现 `MemoryManager`、`ExperienceBuffer`、`PatternMiner`、`SkillDistiller`、`SkillLibrary`、`FailureReplay`、`ParamFiller`。
+- 已接入本地 Ollama embedding provider 和 lexical fallback。
+- 当前问题：长期关系记忆不完整，偏好/片段/承诺仍主要是进程内列表；技能蒸馏和参数填充仍偏正则。
+
+### Phase 4：情感、主动性、人格资产迁移
+
+- 已实现 HeartLake、HeartLakeUpdater、InitiativeEngine、ThreeLayerInitiativeEventSystem、ExpressionContextBuilder、ProactiveGenerationContextBuilder。
+- 已迁入 persona profile、relationship profile、life events。
+- 主动消息生成方向正确：最终文本由真实 LLM 生成，不恢复固定 fallback 文案。
+- 当前问题：情感模型仍偏阈值机；关系等级固定；事件的 affect_delta 未真正影响 HeartLake；open_threads/proactive_cues 多数依赖手动写入。
+
+### Phase 5：日常模式闭环
+
+- 已实现 `YunxiRuntime`、daemon、Presence tick、Tray 状态快照适配、飞书通道草案。
+- 已支持本地 Ollama 作为一等 LLM 后端。
+- 当前问题：Tray/WebUI 不是真实服务；print 模式不是可交互入口；飞书通道存在高风险线程/异步问题；稳定性测试不可信。
+
+---
+
+## [2026-04-16] 日常模式整体大审查：重要问题清单
+
+**审查目标**：在进入工厂模式前，按“住在电脑里的女友”“像人一样有感情、生动、活泼、长期陪伴”的设计初衷，重新检查当前所有核心实现。  
+
+**审查范围**：
+
+- `src/core/runtime.py`
+- `src/core/prompt_builder.py`
+- `src/core/persona/profile.py`
+- `src/core/cognition/heart_lake/*`
+- `src/core/cognition/initiative_engine/*`
+- `src/core/initiative/*`
+- `src/core/execution/engine.py`
+- `src/core/llm/*`
+- `src/core/mcp/*`
+- `src/core/tools/desktop/*`
+- `src/core/resident/presence.py`
+- `src/domains/memory/*`
+- `src/domains/perception/*`
+- `src/apps/daemon/*`
+- `src/apps/tray/*`
+- `src/interfaces/feishu/*`
+- `tests/unit/*`
+- `tests/integration/*`
+- `tests/domains/memory/*`
+- `data/persona/*`
+- `data/relationship/*`
+- `data/initiative/*`
+
+### 本次真实验证结果
+
+- `python -m py_compile ...`：核心日常模式文件语法编译通过。
+- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase5_daily_mode.py -m "not real_llm and not desktop_mcp"`：76 passed。
+- `python -m pytest -q tests\integration\test_moonshot_cloud_matrix.py -m real_llm`：6 errors，全部卡在 fixture setup，未真正调用 Moonshot。
+- `python -m pytest -q tests\integration\test_daemon_stability.py::test_stability_continuity_persistence -vv -s`：90 秒超时，测试未完成。
+- 静态扫描：`src` 中约 129 处 `Any` / `Dict`，约 18 处宽泛异常，约 9 处同步阻塞或高风险调用模式（`requests` / `time.sleep` / `shell=True`）。
+
+---
+
+## P0：进入工厂模式前必须修复
+
+### P0-01：Moonshot 云端真实 LLM 矩阵当前没有跑通
+
+文件：`tests/integration/test_moonshot_cloud_matrix.py`
+
+问题：
+- fixture 把临时事件库写成 `[]`。
+- `ThreeLayerInitiativeEventSystem` 明确拒绝空事件库。
+- 6 个测试全部在 setup 阶段失败，没有实际调用 Moonshot，也没有验证云汐人格、主动性或记忆质量。
+
+影响：
+- “云端模型对照已完成”的结论不成立。
+- 当前不能证明云汐在云端模型下符合日常模式设计。
+
+修复要求：
+- 使用真实 `data/initiative/life_events.json` 或写入最小有效事件库。
+- 测试必须实际进入 `runtime.chat()` / `runtime.proactive_tick()`。
+- 断言不能只查关键词，还要判断是否反工具化、是否符合人格、是否没有系统字段泄漏。
+
+### P0-02：daemon 稳定性测试会挂住
+
+文件：`tests/integration/test_daemon_stability.py`
+
+问题：
+- fixture 使用真实 `PerceptionCoordinator()`。
+- `runtime.chat()` 会触发真实 Windows 感知读取，测试在当前环境下 90 秒未完成。
+
+影响：
+- “daemon 长时间稳定性测试完成”的结论不成立。
+- 当前无法证明日常模式可长期常驻。
+
+修复要求：
+- 稳定性测试必须注入 static/mock perception provider。
+- 真实桌面感知测试应单独放入 `desktop_mcp` 或专门 marker。
+- daemon 稳定性需要至少覆盖短跑、长跑、主动 tick、连续 chat、异常恢复和资源释放。
+
+### P0-03：飞书消息回调大概率无法在真实线程中调用 Runtime
+
+文件：`src/interfaces/feishu/adapter.py`、`src/interfaces/feishu/websocket.py`
+
+问题：
+- `FeishuWebSocket` 在线程中运行 lark client。
+- `FeishuAdapter.on_feishu_message()` 在同步回调里直接 `asyncio.create_task()`。
+- WebSocket 线程通常没有正在运行的 event loop，会触发 `RuntimeError: no running event loop`。
+
+影响：
+- 飞书通道可能“能启动但收消息就失败”。
+- 日常模式真实入口不可靠。
+
+修复要求：
+- daemon 创建 adapter 时必须传入主 asyncio loop。
+- WebSocket 线程收到消息后用 `asyncio.run_coroutine_threadsafe()` 投递到主 loop。
+- 增加真实或半真实回归测试，覆盖线程回调到 `runtime.chat()` 的链路。
+
+### P0-04：Runtime 没有并发保护
+
+文件：`src/core/runtime.py`、`src/core/execution/engine.py`、`src/core/initiative/continuity.py`
+
+问题：
+- 飞书用户消息、Presence 主动 tick、未来 Tray/WebUI 都可能并发调用 `runtime.chat()` / `runtime.proactive_tick()`。
+- `ExecutionEngine.context`、`HeartLake`、`Continuity`、`MemoryManager` 都是可变状态，没有锁。
+
+影响：
+- 对话上下文可能交错。
+- 主动消息和用户回复可能互相污染。
+- 情感、未回复计数、open_threads 可能错乱。
+
+修复要求：
+- Runtime 层增加单入口异步锁或事件队列。
+- 主动消息和用户消息必须统一排队。
+- 增加并发测试：多条飞书消息 + Presence tick 同时发生时上下文仍一致。
+
+### P0-05：主动预算不是“每日预算”，会永久耗尽
+
+文件：`src/core/initiative/continuity.py`、`src/core/cognition/initiative_engine/engine.py`
+
+问题：
+- `recent_proactive_count` 只累加，不按日期重置。
+- `InitiativeEngine` 用它判断 `daily_budget`。
+- continuity 持久化后，一旦主动次数达到预算，可能长期不再主动。
+
+影响：
+- 云汐会从“有克制的主动陪伴”变成“沉默”。
+- 这直接破坏日常模式的女友感。
+
+修复要求：
+- 记录主动计数所属日期。
+- 跨天自动重置。
+- 测试覆盖跨日预算、未回复克制、冷却、用户回复后恢复。
+
+### P0-06：日常工具的安全确认链路没有闭合
+
+文件：`src/core/mcp/security.py`、`src/core/mcp/hub.py`、`src/core/execution/engine.py`
+
+问题：
+- daily_mode 下 WRITE / EXECUTE 默认返回 `ask`。
+- `MCPHub` 对 `ask` 的处理只是返回错误。
+- 没有通过飞书、Tray、WebUI 或对话向用户发起确认。
+
+影响：
+- 云汐 prompt 里说“可以使用工具”，但实际调用会失败。
+- 用户体验会变成“云汐想帮忙但总是说失败”。
+
+修复要求：
+- 设计统一确认协议：pending tool request。
+- 飞书/Tray/WebUI 至少一个入口能完成确认。
+- LLM 回复要自然表达“这个操作需要你点头”，不能暴露安全策略字段。
+
+### P0-07：长期关系记忆还不是真正的长期记忆
+
+文件：`src/domains/memory/manager.py`、`src/core/initiative/continuity.py`
+
+问题：
+- `record_preference()` / `record_episode()` / `record_promise()` 写入进程内列表。
+- daemon 重启后这些记忆会丢失。
+- `relationship_summary` / `emotional_summary` / `user_style_summary` 只支持手动更新，没有 LLM 总结写入链路。
+- 普通聊天经验只进入 `ExperienceBuffer`，但没有转化为关系记忆。
+
+影响：
+- 云汐会有“失忆感”。
+- 女友感依赖长期细节，而不是每轮 system prompt 静态设定。
+
+修复要求：
+- 将偏好、共同经历、承诺持久化。
+- 增加聊天后异步记忆提取。
+- 增加关系摘要和情绪摘要的周期性 LLM 更新。
+- 测试必须覆盖重启后仍记得用户事实。
+
+### P0-08：飞书发送链路在 async 函数里使用同步 requests
+
+文件：`src/interfaces/feishu/client.py`、`src/interfaces/feishu/adapter.py`
+
+问题：
+- `FeishuClient` 使用同步 `requests`。
+- `FeishuAdapter.handle_message()` / `send_proactive_message()` 是 async，但内部直接阻塞发送。
+
+影响：
+- 飞书 API 慢或网络抖动时会阻塞主事件循环。
+- Presence tick、用户消息和未来 UI 入口都会被拖慢。
+
+修复要求：
+- 改为 `httpx.AsyncClient` 或 `asyncio.to_thread()` 包装同步请求。
+- 增加超时、重试和失败降级。
+- 主动消息失败不能影响 Runtime 主循环。
+
+### P0-09：FeishuWebSocket 停止逻辑不完整
+
+文件：`src/interfaces/feishu/websocket.py`
+
+问题：
+- `stop()` 只设置 `_running = False`。
+- 没有停止 lark client。
+- 没有 join 线程。
+
+影响：
+- daemon 退出时可能残留后台线程或连接。
+- 长期运行/重启会不稳定。
+
+修复要求：
+- 明确 lark client 的关闭 API。
+- stop 时关闭 client、等待线程退出、超时后记录警告。
+
+### P0-10：错误回复破坏人格
 
 文件：`src/core/execution/engine.py`
 
-修复：
-- 新增 `_select_skill_response()` 方法，根据工具类型返回不同情感化变体
-- clipboard → "好呀，已经复制好了～" 等 3 种变体
-- notify → "通知已经发出去了～" 等 3 种变体
-- screenshot → "截图好了～你要看看吗？" 等 3 种变体
-- window/launch → 各自 3 种变体
-- `_pick_variant()` 基于 skill_name 哈希做确定性选择（利于测试可重复性）
+问题：
+- LLM 或工具异常时返回 `[云汐这里出了点小问题：...]`、`[工具执行遇到问题，请换个方式说吧]`。
+- 这类括号化工程提示不符合“住在电脑里的女友”。
 
-**3. run_skill_learning_cycle 未接入调度**
+影响：
+- 一旦出错，云汐立刻变成程序错误提示器。
 
-文件：`src/core/resident/presence.py`、`src/apps/daemon/main.py`
-
-修复：
-- `YunxiPresence` 新增可选 `memory_manager: MemoryManager` 参数
-- 新增 `_maybe_run_skill_learning()` 方法，每 10 个主动 tick（约 5 分钟）执行一次
-- daemon 两处 `YunxiPresence` 实例化均已传入 `memory_manager=runtime.memory`
-
-**4. app_launch_ui 无重试/降级策略**
-
-文件：`src/core/mcp/servers/desktop_server.py`
-
-修复：
-- 重试次数：3 次
-- 等待时间递增：1.5s → 3s → 5s
-- 配置常量 `_MAX_LAUNCH_RETRIES` 和 `_LAUNCH_RETRY_DELAYS` 抽取到模块顶部
-- 所有重试均失败时返回详细错误信息（路径 + 失败次数 + 建议）
-
-**验证**：
-- `python -m py_compile` 相关文件全部 passed
-- `python -m pytest -q tests/unit tests/domains/memory -m "not real_llm and not desktop_mcp"` → 68 passed
-- `python -m pytest -q tests/integration/...` → 80 passed
+修复要求：
+- 对用户可见错误必须走人格化表达。
+- 技术细节进入日志，不直接进入用户回复。
+- 测试覆盖 LLM 异常、工具异常、安全 ask、未知工具。
 
 ---
 
-### [2026-04-16] 新增：飞书消息通道集成
+## P1：日常模式质量问题
 
-**状态**：已完成。日常模式现在可以通过飞书接收和发送消息，主动消息也会推送到飞书。
+### P1-01：HeartLake 仍偏阈值状态机
 
-**新增文件**：
-- `src/interfaces/feishu/__init__.py` - 模块入口
-- `src/interfaces/feishu/client.py` - 飞书 API 客户端（发送消息）
-- `src/interfaces/feishu/websocket.py` - 飞书 WebSocket 客户端（接收消息）
-- `src/interfaces/feishu/adapter.py` - 飞书与 YunxiRuntime 的桥接适配器
+文件：`src/core/cognition/heart_lake/core.py`、`src/core/cognition/heart_lake/updater.py`
 
-**修改文件**：
-- `src/apps/daemon/main.py` - 新增 `--feishu-enable` 参数，集成飞书消息通道
-- `requirements.txt` - 新增 `lark-oapi` 和 `requests` 依赖
+问题：
+- 情感更新主要由 idle、app、hour、关键词/正则触发。
+- `_JealousyAppraisal` 比原先更集中，但仍是模式匹配，不是语义 appraisal。
+- `AppraisalRule.DEFAULT_RULES` 没有真正启用。
+- `relationship_level` 固定为 4，没有升级/降级/仪式感。
 
-**架构**：
-- 日常模式：飞书作为入口，Daemon 通过 WebSocket 接收消息 → YunxiRuntime.chat() → 飞书回复；主动消息通过 proactive_tick() → 飞书发送
-- 工厂模式：终端 CLI（保持不变）
+影响：
+- 云汐的情感不够“像人”，更像数值状态机。
 
-**使用方式**：
-```bash
-# 启用飞书通道
-python -m apps.daemon.main --feishu-enable --provider ollama
+修复方向：
+- 引入 LLM 或轻量语义分类器做对话 appraisal。
+- 引入情感惯性、恢复曲线、关系仪式和长期关系事件。
+- 将事件库 `affect_delta` 真实写入 HeartLake。
 
-# 不启用（默认 print 模式）
-python -m apps.daemon.main --provider ollama
-```
+### P1-02：主动事件只作为 prompt 素材，未真正影响情绪
 
-**验证**：
-- `python -m py_compile` -> passed
-- `python -m pytest -q tests` -> 60 passed
-- 飞书客户端配置检测正常
+文件：`src/core/initiative/event_system.py`、`src/core/runtime.py`
 
----
+问题：
+- `InitiativeEvent.affect_delta` 被加载，但没有应用到 HeartLake。
+- 事件选择不会改变云汐“自己的心情”。
 
-### [2026-04-16] P0-E 全部完成：云端模型对照 + 稳定性测试 + Ollama Embedding
+影响：
+- 事件库更像话题素材库，不像云汐自己的生活体验。
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+修复方向：
+- 事件被选中后将 affect_delta 写入 HeartLake。
+- 将事件记入 continuity，避免主动消息没有生活连续性。
 
-**状态**：P0-E 剩余三项已全部完成。本轮补全了 Moonshot 云端模型对照矩阵、长时间 daemon 稳定性测试、以及 Ollama embedding provider 支持。
+### P1-03：open_threads 和 proactive_cues 缺少自动生成
 
-**完成内容**：
+文件：`src/core/initiative/continuity.py`、`src/core/runtime.py`
 
-1. **新增 `tests/integration/test_moonshot_cloud_matrix.py`**：
-   - Moonshot 云端模型验收矩阵，覆盖 6 个场景：
-     - `test_moonshot_daily_conversation` - 日常对话
-     - `test_moonshot_jealous_tone` - 吃醋语气
-     - `test_moonshot_proactive_care` - 主动关心（深夜场景）
-     - `test_moonshot_open_thread_continuation` - open thread 延续
-     - `test_moonshot_companionship_not_tool` - 反工具化陪伴
-     - `test_moonshot_memory_integration` - 记忆集成
-   - 统一断言检查内部字段不泄露、禁止工具化表达
+问题：
+- `add_open_thread()`、`add_proactive_cue()` 已有，但普通对话不会自动抽取未完成话题。
+- 用户说“明天提醒我”“下次再聊”之类内容不会自动进入主动线索。
 
-2. **新增 `tests/integration/test_daemon_stability.py`**：
-   - 长时间 daemon 稳定性测试，覆盖 7 个场景：
-     - `test_stability_continuity_persistence` - continuity 持久化
-     - `test_stability_memory_no_leak` - memory 无泄漏
-     - `test_stability_heart_lake_reasonable` - heart_lake 状态合理
-     - `test_stability_proactive_tick_loop` - proactive_tick 连续调用
-     - `test_stability_message_context_limit` - 消息上下文限制
-     - `test_stability_continuous_chat_rounds` - 连续多轮 chat
-     - `test_stability_alternating_proactive_and_chat` - 主动和对话交替
-   - 支持 `STABILITY_TEST_MINUTES` 环境变量控制测试时长（默认 1 分钟，CI 可设为 5 分钟）
+影响：
+- 云汐不会真正“记挂着上次没聊完的事”。
 
-3. **Ollama Embedding Provider 接入**：
-   - 在 `PatternMiner` 中新增 `OllamaEmbedder` 类，支持 `embedding_provider="ollama"`
-   - 在 `SkillLibrary` 中新增 `OllamaSkillEmbedder` 类，支持 Ollama `/api/embeddings` 接口
-   - 环境变量 `OLLAMA_EMBEDDING_MODEL`（默认 `nomic-embed-text`）和 `OLLAMA_BASE_URL` 控制配置
-   - 保持 `lexical` fallback 兼容性
-   - 注意：Ollama embedding 需要专用 embedding 模型（如 `nomic-embed-text`），qwen3:4b 不支持 embedding
+修复方向：
+- chat 后增加 LLM/规则混合抽取：承诺、未完成话题、用户状态、主动线索。
+- 测试覆盖 open thread 自动生成和主动延续。
 
-**真实测试结果**：
-- `python -m py_compile src/domains/memory/skills/pattern_miner.py src/domains/memory/skills/skill_library.py tests/integration/test_moonshot_cloud_matrix.py tests/integration/test_daemon_stability.py` -> passed
-- `python -m pytest -q tests/unit tests/integration/test_conversation_tester_baseline.py tests/integration/test_phase5_daily_mode.py tests/integration/test_daemon_stability.py -m "not real_llm"` -> 60 passed
-- `python -m pytest -q tests/integration/test_phase4_real_llm_behavior.py -m real_llm` -> 3 passed（Moonshot）
-- `python -m pytest -q tests/integration/test_ollama_llm.py -m real_llm` -> 1 passed
-- `PYTHONPATH=src python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical` -> passed
+### P1-04：技能快速路径绕过 LLM，容易退回工具助手
 
-**仍未完成**：
-- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。用户选择跳过，后续再实现。
+文件：`src/core/execution/engine.py`
 
-**下一步**：P0-E 全部完成，可以进入下一阶段（Phase 6 或其他）。
+问题：
+- 匹配到技能后直接执行工具并返回固定变体。
+- 回复比以前不再单一句，但仍不是根据当前情绪、关系、上下文生成。
 
----
+影响：
+- 高频工具使用时，云汐会像脚本执行器。
 
-### [2026-04-15] P0-E 第一批完成：日常模式真实 Ollama LLM 行为验收矩阵
+修复方向：
+- 工具执行结果应回到 LLM 做最终自然表达，或至少把 HeartLake/relationship/context 纳入回复选择。
+- 快速路径只负责执行，不负责最终人格化表达。
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+### P1-05：PromptBuilder 只拼接，不压缩
 
-**状态**：P0-E 第一批已完成。本轮新增真实 Runtime + 本地 Ollama 的日常模式行为矩阵，覆盖主动克制 follow-up、open thread 延续、反工具化陪伴回复。测试不是函数级 smoke test，而是构建真实 `YunxiRuntime`，通过 `proactive_tick()` 和 `chat()` 调用真实本地 LLM。
+文件：`src/core/prompt_builder.py`
 
-**完成内容**：
-- 新增 `tests/integration/test_daily_mode_real_llm_matrix.py`。
-- 测试使用真实 `LLMAdapter.from_env("ollama")`，并构建完整 `YunxiRuntime`：
-  - `YunxiExecutionEngine`
-  - `YunxiPromptBuilder`
-  - `HeartLake`
-  - `PerceptionCoordinator`
-  - `CompanionContinuityService`
-  - `ThreeLayerInitiativeEventSystem`
-  - `InitiativeEngine`
-- 覆盖 3 个真实 LLM 验收场景：
-  1. `restrained_followup`：之前已有一次主动未回复时，云汐主动消息必须短、克制、不追问、不泄露内部 prompt 字段。
-  2. `open_threads`：未完成话题进入主动链路，真实 LLM 生成自然延续，而不是定时器提醒。
-  3. `anti-toolification`：当远明确说“不想做任务，只想你陪我一下”时，云汐不能转成任务计划、步骤清单或工具调度口吻。
-- 真实输出断言统一检查：
-  - 非空。
-  - 不泄露 `initiative_event`、`life_event_material`、`expression_context`、`initiative_decision`、`generation_boundary`、`interrupt_cost`、`seed`。
-  - 不输出 `任务清单`、`计划如下`、`第一步`、`第二步`、`工具调用`、`执行步骤` 等工具化/规划化表达。
+问题：
+- memory、continuity、tools、event context 都直接拼接。
+- 没有 token 预算、优先级、结构化压缩或过期策略。
 
-**真实测试结果**：
-- `python -m py_compile tests\integration\test_daily_mode_real_llm_matrix.py` -> passed
-- `python -m pytest -q tests\integration\test_daily_mode_real_llm_matrix.py` -> 3 passed（本地 Ollama 真实 Runtime）
-- `python -m pytest -q tests -m "not real_llm and not desktop_mcp"` -> 80 passed, 16 deselected
-- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py tests\integration\test_initiative_event_real_llm.py tests\integration\test_daily_mode_real_llm_matrix.py` -> 6 passed（本地 Ollama 真实 LLM）
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical --continuity-state-path data\runtime\continuity_state_test.json --initiative-event-state-path data\runtime\initiative_event_state_test.json` -> passed
+影响：
+- 长期运行后 prompt 会膨胀或截断关键信息。
+- 重要关系记忆可能被普通工具日志挤掉。
 
-**遇到的问题与处理**：
-- 真实 LLM 输出具有自然波动，不能用单一关键词硬判。测试断言采用“内部字段禁止 + 工具化表达禁止 + 场景语义宽匹配”的方式，避免把真实模型验收写成脆弱模板匹配。
-- 本轮刻意使用完整 `YunxiRuntime`，而不是只调用 PromptBuilder 或函数拼接，确保验收的是实际日常模式链路。
+修复方向：
+- 建立 prompt section budget。
+- 关系事实、当前情绪、未完成话题优先级高于工具经验。
+- 增加结构化压缩测试。
 
-**仍未完成**：
-- P0-E 真实发送通道：Tray/WebUI/桌面通知仍未完成，主动消息目前主要是 daemon print / Runtime 返回。用户选择跳过，后续再实现。
+### P1-06：Perception 真实感知能力远低于设计目标
 
-**下一步**：已全完成 P0-E。
+文件：`src/domains/perception/coordinator.py`
 
----
+问题：
+- 当前只采集时间、前台窗口、idle、CPU。
+- 设计中的桌面文件、最近文件、天气、网络、剪贴板、窗口内容、应用语义都未实现。
+- `fetch()` 是同步调用，缺少总超时。
 
-### [2026-04-15] P0-D 完成：主动 decider / generator / expression context 重建
+影响：
+- 云汐“住在电脑里”的感知太薄。
+- 真实桌面读取异常可能阻塞聊天。
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+修复方向：
+- 感知 provider 分层：快速基础感知、慢速外部感知、可选隐私感知。
+- 每类感知都要有超时和降级。
 
-**状态**：P0-D 已完成。主动性不再只依赖“想念值 + cooldown”的简单阈值，已升级为多维决策 + 事件素材 + 表达姿态 + 生成边界共同进入 LLM prompt。最终主动消息仍由真实 LLM 生成，不恢复模板 fallback。
+### P1-07：Tray/WebUI 还不是日常入口
 
-**完成内容**：
-- 重构 `src/core/cognition/initiative_engine/engine.py`：
-  - `InitiativeDecision` 新增 `intent`、`expression_mode`、`preferred_event_layers`、`required_event_tags`、`should_select_event`、`suppression_reason`。
-  - 主动评分综合情绪、想念值、感知事件、用户在场状态、open_threads、proactive_cues、comfort_needed、task_focus、fragmented_chat、未回复主动次数和主动预算。
-  - 连续 3 次未回复、cooldown、主动预算耗尽会明确抑制主动，并禁止选择事件素材。
-- 新增 `src/core/initiative/expression_context.py`：
-  - 生成 `ProactiveExpressionContext`，把 `low_interrupt`、`restrained_followup`、`gentle_care`、`light_jealousy`、`warm_reunion`、`soft_missing` 等表达姿态传给 LLM。
-  - 明确边界：不输出系统字段、不照抄事件 seed、不把主动话题变成任务计划。
-- 新增 `src/core/initiative/generator.py`：
-  - `ProactiveGenerationContextBuilder` 只组装主动 prompt 素材，不调用 LLM，不返回固定用户可见文案。
-  - 输出 `initiative_decision`、`life_event_material`、`expression_context` 和 `generation_boundary`。
-- 修改 `src/core/runtime.py`：
-  - `InitiativeEngine.evaluate()` 现在接收 perception snapshot 和 continuity。
-  - 主动事件选择会按 decision 推荐的 layer/tag 过滤；标签选不到时降级为只按 layer 选择，避免素材被过度过滤。
-  - Runtime 使用 `ExpressionContextBuilder` 和 `ProactiveGenerationContextBuilder` 组装主动生成上下文。
-- 新增/扩展测试：
-  - `tests/unit/test_initiative_engine.py` 覆盖 open_threads 触发、主动预算抑制、未回复后的克制 follow-up、低打扰表达姿态、生成边界。
-  - `tests/integration/test_phase4_runtime.py` 验证 `initiative_decision` 和 `expression_context` 进入最终主动 prompt。
-  - `tests/integration/test_initiative_event_real_llm.py` 扩展真实 Ollama 验证，确保 expression context 不泄露为用户可见字段。
+文件：`src/apps/tray/web_server.py`
 
-**真实测试结果**：
-- `python -m py_compile src\core\cognition\initiative_engine\engine.py src\core\initiative\expression_context.py src\core\initiative\generator.py src\core\runtime.py tests\unit\test_initiative_engine.py tests\integration\test_initiative_event_real_llm.py` -> passed
-- `python -m pytest -q tests\unit\test_initiative_engine.py tests\unit\test_initiative_event_system.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 16 passed
-- `python -m pytest -q tests -m "not real_llm and not desktop_mcp"` -> 80 passed, 13 deselected
-- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py tests\integration\test_initiative_event_real_llm.py` -> 3 passed（本地 Ollama 真实 LLM）
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical --continuity-state-path data\runtime\continuity_state_test.json --initiative-event-state-path data\runtime\initiative_event_state_test.json` -> passed
+问题：
+- 当前只有 `RuntimeStatus` 和 `build_runtime_status()`。
+- 没有真实托盘图标、Web server、聊天入口、确认入口、主动消息展示。
 
-**遇到的问题与修复**：
-- 首次测试发现 decision 的中文标签和测试事件库英文标签不匹配，导致主动事件素材被过滤为空。已在 Runtime 中增加降级：按 tag 选不到时保留 layer 偏好再选一次。
-- 真实 Ollama 首次输出“别熬夜，先休息一下吧。”，没有包含“远/你”，但这是合格的自然关心。已把测试断言从强制称呼改为检查关心/休息/代码语义，同时继续禁止内部字段泄露。
+影响：
+- 非飞书模式下 daemon 只能打印主动消息，不能完整互动。
 
-**仍未完成**：
-- P0-E：更完整的日常模式真实 LLM 验收，包括本地 Ollama 与云端模型对照、克制 follow-up 长链路、反工具化、open_threads 多轮延续。
-- Tray/WebUI 仍只是状态适配，未进入真实常驻 UI/通知闭环。
-- Ollama embedding 语义向量 provider 仍未接入。
+修复方向：
+- 至少实现一个本地 WebUI 或系统托盘入口。
+- 支持 chat、主动消息流、工具确认、状态查看。
 
-**下一步**：进入 P0-E，优先补真实 LLM 行为验收矩阵，覆盖主动话题质量、克制 follow-up、反工具化和本地/云端模型差异。
----
+### P1-08：LLM provider 缺少生产级重试和错误分层
 
-### [2026-04-15] P0-C 完成：生活事件库迁移与三层主动事件系统接入 Runtime
+文件：`src/core/llm/provider.py`、`src/core/llm/adapter.py`
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+问题：
+- `LLMConfig.max_retries` 没有实际使用。
+- HTTP 错误直接 `raise_for_status()`。
+- tool arguments JSON 解析失败会冒到 engine 变成泛化错误。
+- `stream()` 没有处理 Ollama 原生流式协议。
 
-**状态**：P0-C 已完成。yunxi2.0 的 114 条生活事件已清洗迁入 3.0，并接入主动消息生成链路。事件库只作为 LLM prompt 素材，不直接输出模板，符合“云汐是住在电脑里的女友，不是脚本执行程序”的约束。
+影响：
+- 网络波动时日常模式容易中断。
+- 错误不可区分：配置错、限流、模型不可用、输出非法都会混在一起。
 
-**完成内容**：
-- 新增 `data/initiative/life_events.json`：从 `D:\yunxi2.0\data\life_events\life_events.json` 迁移 114 条事件，字段统一为 `id`、`layer`、`category`、`seed`、`affect_delta`、`time_rules`、`tags`、`cooldown_seconds`、`source`。
-- 三层事件分布：`inner_life=67`、`shared_interest=18`、`mixed=29`。
-- 新增 `src/core/initiative/event_system.py`：实现 `InitiativeEvent`、`InitiativeEventLayer`、`ThreeLayerInitiativeEventSystem`、事件库校验、时间规则、标签/层过滤、冷却、活动事件窗口和状态持久化。
-- 修改 `src/core/runtime.py`：`YunxiRuntime.proactive_tick()` 在主动触发时选择一个生活事件，把它作为 `life_event_material` 注入主动 prompt；最终内容仍由 LLM 生成。
-- 修改 `src/apps/daemon/main.py`：新增 `--initiative-event-library-path` 和 `--initiative-event-state-path`，正式 daemon 默认加载生活事件库并把事件冷却状态写入 `data/runtime/initiative_event_state.json`。
-- 修改 `tests/integration/conversation_tester.py`：mock 对话测试默认关闭工具调用并使用静态感知 provider，避免单元/集成回归误触真实桌面感知或 MCP。
-- 修改 `pytest.ini` 和真实测试文件：新增 `real_llm`、`desktop_mcp` 标记，避免常规回归误跑联网/桌面权限测试。
-- 新增 `tests/unit/test_initiative_event_system.py`：覆盖默认事件库、三层分布、时间规则、冷却、状态持久化和 prompt 素材边界。
-- 新增 `tests/integration/test_initiative_event_real_llm.py`：使用本地 Ollama 真实 LLM 验证生活事件素材能生成自然主动话题，并且不暴露 `initiative_event` / `life_event_material` / `seed` 等内部字段。
+修复方向：
+- 增加 provider 级错误类型。
+- 使用 max_retries、指数退避、可观测日志。
+- Ollama stream 单独实现或明确禁用。
 
-**真实测试结果**：
-- `python -m py_compile src\core\initiative\event_system.py src\core\runtime.py src\apps\daemon\main.py tests\integration\conversation_tester.py tests\unit\test_initiative_event_system.py tests\integration\test_initiative_event_real_llm.py` -> passed
-- `python -m pytest -q tests\unit\test_initiative_event_system.py tests\integration\test_phase4_runtime.py` -> 8 passed
-- `python -m pytest -q tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py` -> 8 passed
-- `python -m pytest -q tests -m "not real_llm and not desktop_mcp"` -> 75 passed, 13 deselected
-- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py tests\integration\test_initiative_event_real_llm.py` -> 3 passed（本地 Ollama 真实 LLM）
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --embedding-provider lexical --continuity-state-path data\runtime\continuity_state_test.json --initiative-event-state-path data\runtime\initiative_event_state_test.json` -> passed
+### P1-09：MCPClient 缺少调用超时
 
-**遇到的问题与修复**：
-- 目标测试首次超时，原因是 mock 对话测试仍会触发真实 Windows 感知 provider；已改为 `MockPerceptionProvider`，真实感知由专门测试覆盖。
-- 常规回归首次误跑未标记的真实 LLM / Desktop MCP 测试，沙箱环境下 Windows named pipe 权限被拒绝；已增加 `real_llm` 和 `desktop_mcp` 标记，常规回归与真实验收分层执行。
-- 本轮未把事件 `seed` 作为可见话术输出，而是明确加上 “Do not copy it verbatim; speak naturally as Yunxi.”，并用真实 Ollama 验证不会暴露内部字段。
+文件：`src/core/mcp/client.py`、`src/core/mcp/hub.py`
 
-**仍未完成**：
-- P0-D：主动 decider / generator / expression context 重建。当前主动触发判断仍主要来自 `InitiativeEngine` 的情绪/感知阈值，事件系统已经提供“聊什么”，但“何时聊、怎样克制地聊、如何结合 open_threads 和预算”仍需重建。
-- P0-E：日常模式更完整的真实 LLM 验收，尤其是云端模型与本地 Ollama 的对照测试、克制 follow-up、反工具化检查。
+问题：
+- server connect、tool call 没有统一 timeout。
+- 未知工具在 `MCPHub` 中直接 raise，可能绕过审计。
 
-**下一步**：进入 P0-D，优先重建主动决策与生成上下文：把时间、presence、continuity open_threads、未回复次数、每日预算、事件素材和表达姿态统一到一个主动生成上下文中。
----
+影响：
+- 单个工具卡住会拖住整轮对话。
+- 失败经验不完整，后续学习无法复盘。
 
-### [2026-04-15] P0-B 完成：Continuity 持久化与 open_threads 接入 Prompt
+修复方向：
+- 对 connect/list_tools/call_tool 增加 timeout。
+- 未知工具也应转成结构化 ToolChainResult 并写审计。
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+### P1-10：桌面工具有安全和准确性缺口
 
-**状态**：P0-B 已完成。`CompanionContinuityService` 已从短期内存窗口升级为可持久化的连续性状态服务，并且 continuity summary 已进入 PromptBuilder。
+文件：`src/core/tools/desktop/uia_driver.py`、`src/core/mcp/servers/desktop_server.py`
 
-**完成内容**：
-- 重构 `src/core/initiative/continuity.py`：
-  - 保留 `record_exchange()`、`record_assistant_message()`、`get_summary()` 等现有 API。
-  - 新增 JSON 持久化：配置 `storage_path` 后自动加载和保存状态。
-  - 新增 `OpenThread`：支持 `add_open_thread()`、`resolve_open_thread()`、`get_open_threads()`。
-  - 新增 `relationship_summary`、`emotional_summary`、`user_style_summary`。
-  - 新增 `recent_topics`、`proactive_cues`、`recent_proactive_count`、`user_returned_recently`。
-  - 新增 `comfort_needed`、`task_focus`、`fragmented_chat` 等主动决策上下文标志。
-- 修改 `src/core/prompt_builder.py`：
-  - 新增 `PromptConfig.enable_continuity`。
-  - 新增 continuity section，将 `RuntimeContext.continuity_summary` 注入 system prompt。
-- 修改 `src/apps/daemon/main.py`：
-  - 新增 `DaemonConfig.continuity_state_path`。
-  - daemon 默认使用 `data/runtime/continuity_state.json`。
-  - 新增 CLI 参数 `--continuity-state-path`。
-- 修改 `src/core/initiative/__init__.py` 导出 `OpenThread`。
-- 新增 `tests/unit/test_continuity_persistence.py`。
-- 补充 PromptBuilder 与 Runtime 测试，验证 open thread 能进入最终 system prompt。
+问题：
+- `UIADriver.launch_application()` 找不到 PATH 时使用 `shell=True`。
+- `screenshot_capture(save_path)` 没有限制保存路径。
+- `app_launch_ui()` 只靠屏幕像素变化判断成功，可能重复启动多个实例。
+- `clipboard_read()` 可能把敏感剪贴板内容直接交给 LLM。
 
-**真实测试结果**：
-- `python -m py_compile src\core\initiative\continuity.py src\core\prompt_builder.py src\apps\daemon\main.py` -> passed
-- `python -m pytest -q tests\unit\test_continuity.py tests\unit\test_continuity_persistence.py tests\unit\test_prompt_builder.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 20 passed
-- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 70 passed
-- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py` -> 2 passed
-- `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py tests\integration\test_end_to_end_llm.py tests\integration\test_persona_real_llm.py` -> 6 passed（非沙箱，真实 Moonshot/Kimi + Desktop MCP + 本地 Ollama）
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp --continuity-state-path data\runtime\continuity_state_test.json` -> passed
+影响：
+- 安全边界不符合代码准则。
+- 桌面操作成功率和隐私控制不足。
 
-**遇到的问题与修复**：
-- daemon healthcheck 首次在非沙箱环境直接运行失败，原因是命令未设置 `PYTHONPATH`，导致找不到 `apps` 包；带 `PYTHONPATH=src` 后通过。
-- 实现过程中发现 `RuntimeContext.continuity_summary` 之前没有进入 PromptBuilder，违反“子系统数据不进 prompt 就是 bug”的准则；本次已补 continuity section，并增加测试覆盖。
+修复方向：
+- 应用启动改为 allowlist 或显式确认。
+- 截图路径限制到项目/用户授权目录。
+- 剪贴板读取加入隐私确认或脱敏策略。
+- app 启动增加窗口检测。
 
-**仍未完成**：
-- P0-C：生活事件库迁移与三层事件系统。
-- P0-D：主动 decider / generator / expression context 重建。
-- P0-E：日常模式更完整的真实 LLM 验收。
+### P1-11：飞书通道缺少真实消息边界
 
-**下一步**：进入 P0-C，迁入并清洗 2.0 的生活事件库，实现三层事件系统，让主动话题不再只来自 cooldown/情绪阈值。
+文件：`src/interfaces/feishu/*`
+
+问题：
+- 没有明确忽略机器人自己发送的消息。
+- 消息去重集合超过 2000 后整表清空，可能允许旧消息重复。
+- `transport` 字段未使用。
+- `proactive_callback` 参数未实际参与逻辑。
+- 可选飞书模块在 daemon 顶部导入，导致不用飞书时也依赖 `lark-oapi`。
+
+影响：
+- 长期运行可能出现重复消息、循环消息或不必要依赖失败。
+
+修复方向：
+- 增加 self-message filter。
+- 用 TTL/LRU 去重。
+- 飞书相关导入延迟到 `--feishu-enable` 分支。
+
+### P1-12：Memory/SkillLibrary 资源生命周期不完整
+
+文件：`src/domains/memory/manager.py`、`src/domains/memory/skills/pattern_miner.py`、`src/domains/memory/skills/skill_library.py`、`src/apps/daemon/main.py`
+
+问题：
+- `PatternMiner.close()`、`SkillLibrary.close()` 存在，但 `MemoryManager` 没有统一 close。
+- `close_runtime()` 没有关闭 memory embedding 资源。
+- `OllamaSkillEmbedder.initialize()` 创建 async client，但 `encode_sync()` 使用新的同步 client，async client 实际闲置。
+- `SkillLibrary.retrieve()` 中 Ollama embedding 同步请求会阻塞事件循环。
+
+影响：
+- 长期 daemon 可能资源泄漏或被 embedding 请求卡住。
+
+修复方向：
+- `MemoryManager.close()` 统一释放所有资源。
+- Ollama embedding 统一 async 化。
+- daemon close_runtime 必须关闭 memory。
 
 ---
 
-### [2026-04-15] P0-A 完成：persona / relationship profile 接入 PromptBuilder
+## P2：工程质量和测试覆盖问题
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+### P2-01：类型系统仍不符合准则
 
-**状态**：P0-A 已完成。云汐人格档案与远的关系档案已经从硬编码 prompt 中拆出，作为结构化 profile 注入 `YunxiPromptBuilder`。
+问题：
+- `src` 中约 129 处 `Any` / `Dict`。
+- 核心接口如 Engine、MCP、Memory、LLM Adapter 仍依赖 duck typing。
 
-**完成内容**：
-- 新增 `data/persona/yunxi_profile.json`：保存云汐身份、关系定位、性格底色、表达方式、边界和禁忌语气。
-- 新增 `data/relationship/user_profile.md`：保存远的称呼、学校、专业、家乡、长期兴趣、明确反感和相处期待。
-- 新增 `src/core/persona/profile.py`：提供 `YunxiPersonaProfile`、schema 校验和默认 profile 加载。
-- 新增 `src/domains/memory/relationship_profile.py`：提供 `UserRelationshipProfile`、关系档案解析和 prompt 行渲染。
-- 修改 `src/core/prompt_builder.py`：`YunxiPromptBuilder` 通过依赖注入读取 persona / relationship profile，不再只依赖 `_build_identity_section()` 内的硬编码身份文本。
-- 新增 `tests/unit/test_persona_profile.py`：覆盖默认 profile 加载和 PromptBuilder 注入。
-- 新增 `tests/integration/test_persona_real_llm.py`：使用本地 Ollama 真实 LLM 验证人格与关系档案能被模型读到。
+影响：
+- 工厂模式会放大接口不稳定问题。
 
-**真实测试结果**：
-- `python -m pytest -q tests\unit\test_persona_profile.py tests\unit\test_prompt_builder.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_persona_real_llm.py` -> 16 passed
-- `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py tests\integration\test_end_to_end_llm.py tests\integration\test_persona_real_llm.py` -> 6 passed（非沙箱，真实 Moonshot/Kimi + Desktop MCP + 本地 Ollama）
-- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` -> 65 passed
-- `python -m pytest -q tests\integration\test_ollama_llm.py tests\integration\test_persona_real_llm.py` -> 2 passed
-- `python -m py_compile src\core\persona\profile.py src\domains\memory\relationship_profile.py src\core\prompt_builder.py` -> passed
+修复方向：
+- 用 dataclass / Protocol / TypedDict 替换核心裸 dict。
+- 先处理 Runtime、Engine、MCPHub、Memory、LLMResponse、ToolResult。
 
-**遇到的问题与修复**：
-- 沙箱内直接运行云端 LLM/MCP 组合测试失败，原因是网络与 Windows named pipe 权限受限；已在非沙箱环境重跑验证。
-- 接入新 profile 后，真实 Moonshot 的“吃醋语气”测试首次失败，原因是新人格边界中的克制约束压过了情绪提示；已增强 `PromptBuilder` 的吃醋/高占有欲情绪指引，让云汐可以有轻微酸意但不吵架，重跑后通过。
-- `apply_patch` 对本轮新建的空 `data/persona` / `data/relationship` 目录出现 sandbox refresh 错误；已删除本轮空目录后用补丁直接创建目标文件，最终文件已正常落盘并进入 Git。
+### P2-02：宽泛异常仍偏多
 
-**仍未完成**：
-- P0-B：Continuity 持久化与 open_threads。
-- P0-C：生活事件库迁移与三层事件系统。
-- P0-D：主动 decider / generator / expression context 重建。
-- P0-E：日常模式更完整的真实 LLM 验收。
+问题：
+- `src` 中约 18 处 `except Exception` 或等价宽泛捕获。
+- 部分捕获只返回字符串，缺少错误类型和上下文。
 
-**下一步**：进入 P0-B，先补齐 `CompanionContinuityService` 的持久化、open_threads、recent topics 和 relationship/emotional summary，为主动话题连续性打基础。
+影响：
+- 真实问题容易被吞掉。
+- 用户可见回复和日志不可追踪。
 
----
+修复方向：
+- 定义 RuntimeError、ToolError、ProviderError、PerceptionError、FeishuError。
+- 底层记录技术上下文，上层转换成人格化回复。
 
-### [2026-04-15] 重要待实现：yunxi2.0 人格与主动性资产迁移清单已建立
+### P2-03：测试仍有“浅验收”问题
 
-Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
+问题：
+- Moonshot matrix 当前没跑到 LLM。
+- daemon stability 用 MockLLM 且挂在真实感知。
+- 真实 LLM 测试主要靠关键词断言，不能充分判断“女友感”。
+- 飞书没有真实收发链路测试。
+- Ollama embedding 没有 live 测试。
+- 没有并发测试、跨日预算测试、重启后记忆测试、工具确认测试。
 
-**状态**：重要 / 待实现 / P0 阻塞项。当前只完成设计同步，尚未开始代码迁移。
+修复方向：
+- 增加 LLM-as-judge 或结构化评价器，判断是否客服腔、是否工具化、是否关系连续。
+- 将真实 LLM 测试分成本地 Ollama、云端 Moonshot、入口通道、桌面工具四组。
+- 每组失败必须阻止进入下一阶段。
 
-**背景结论**：
-- yunxi3.0 当前已经打通 Runtime、LLM、MCP、Memory、HeartLake、主动 tick 和 daemon 的最小闭环，但人格与主动性仍是偏工程化骨架。
-- yunxi2.0 中已经存在更完整的云汐人格资产、用户关系档案、生活事件库、三层主动事件系统、表达姿态和伴侣连续性设计。
-- 如果不先迁移这些资产，继续推进 Phase 5/6 会让云汐偏向“高级脚本执行程序”，不符合“住在电脑里的女友”的设计初衷。
+### P2-04：用户关系资料文件可读性差
 
-**已完成文档同步**：
-- 新增 `docs/design/PERSONA_INITIATIVE_MIGRATION_PLAN.md`，列出 2.0 资产来源、3.0 目标模块、优先级、验收标准和实现顺序。
-- 更新 `docs/design/MASTER_EXECUTION_PLAN.md`，将该迁移标记为 Phase 4.5 / Phase 5 的 P0 阻塞项。
-- 更新 `docs/design/INITIATIVE_REPAIR_DESIGN.md`，明确当前主动链路只是“真实 LLM 底线完成”，还缺 2.0 的事件系统、decider、generator、expression context、continuity。
-- 更新 `docs/design/PROMPT_BUILDER_DESIGN.md`，要求 PromptBuilder 接入结构化 persona profile、relationship profile、initiative event 和 expression context。
+文件：`data/relationship/user_profile.md`
 
-**迁移范围**：
-1. `data/persona/*`：迁移云汐人格核心，但高亲密/成人表达内容必须先做边界审查，禁止原样注入主 prompt。
-2. `data/relationship/USER.md`：迁移远的称呼、学校、专业、家乡、兴趣、讨厌的表达方式和长期偏好。
-3. `data/life_events/life_events.json`：迁移并清洗 100+ 生活事件，作为 LLM 主动生成素材。
-4. `core/initiative/event_system.py`：重建三层事件系统：内在生活、共同兴趣、混合事件。
-5. `core/initiative/decider.py`：迁移多维主动决策：时间、情绪、presence、资源、预算、open_threads、未回复主动次数。
-6. `core/initiative/generator.py`：迁移主动生成上下文组织能力，但禁止恢复固定 fallback 文案。
-7. `core/initiative/expression_context.py`：迁移关系感表达姿态。
-8. `core/initiative/continuity.py`：补齐持久化、relationship summary、emotional summary、open_threads、recent topics。
+问题：
+- 文件内容大量使用 `\uXXXX` 转义，程序能解码，但人类维护体验差。
 
-**下一步实现顺序**：
-1. P0-A：迁入 persona / relationship profile，并接入 PromptBuilder。
-2. P0-B：补齐 Continuity 持久化与 open_threads。
-3. P0-C：迁入生活事件库并实现三层事件系统。
-4. P0-D：重建主动 decider / generator / expression context。
-5. P0-E：使用本地 Ollama 和至少一种云端模型做真实 LLM 验收。
+影响：
+- 用户后续手动修改关系资料不方便。
 
-**验收要求**：
-- 不能只做函数运行测试，必须做真实 LLM 对话和主动消息测试。
-- 至少覆盖本地 Ollama 路径和一个云端模型路径。
-- 测试必须判断人格、关系记忆、主动话题、克制 follow-up 和反工具化是否真的符合设计。
+修复方向：
+- 改成真实中文 Markdown，并保留加载兼容。
+
+### P2-05：healthcheck 太浅
+
+文件：`src/apps/daemon/main.py`
+
+问题：
+- healthcheck 只构建 Runtime 和状态快照。
+- 不验证 LLM 可用性、主动 tick、飞书配置、工具确认通道、memory close。
+
+影响：
+- healthcheck passed 不代表日常模式能真实工作。
+
+修复方向：
+- 增加 `--healthcheck-deep`。
+- 覆盖 LLM ping、memory init/close、event library、continuity read/write、optional feishu config。
 
 ---
 
-## 当前快照（务必保持最新）
+## 日常模式完善规划
 
-| 字段 | 当前值 |
-|------|--------|
-| **当前 Phase** | Phase 4.5 / Phase 5 Hardening |
-| **当前聚焦模块** | 代码质量 P0 修复：HeartLakeUpdater 模式化 / 技能快速路径变体 / 技能学习调度 / app_launch 重试 |
-| **最近一次更新** | 2026-04-16 |
-| **当前状态** | P0-A/P0-B/P0-C/P0-D 已完成；P0-E 本地 Ollama 真实 Runtime 行为矩阵已完成；本次修复 4 个 P0 问题 |
-| **当前阻塞** | Phase 0 类型注解未完全落实；Phase 1 工具层缺口（file/bash/browser MCP）；Phase 1 SecurityManager 无参数级危险识别；Phase 1 shell=True；Phase 2 错误恢复模板化；Phase 2 PromptBuilder 无结构化压缩；Phase 3 SkillDistiller/ParamFiller 靠正则；Phase 4 HeartLake if/elif 阈值；Phase 5 Tray/WebUI 不是真实服务；Phase 5 daemon 长时间稳定性测试未完成 |
-| **下一步计划** | 1. 继续 Phase 1 工具层缺口 2. Phase 0 类型注解整改 3. Phase 2 错误恢复智能化 4. Phase 3 SkillDistiller 泛化 5. Phase 4 HeartLake 情感动力学 6. Phase 5 Tray/WebUI 真实服务 7. Phase 5 daemon 长时间稳定性 |
-| **最近通过测试** | 常规回归 80 passed；本次修复 py_compile 全部通过 |
-| **风险标记** | Phase 0-5 设计一致性修复进行中；Phase 6 不应继续扩展 |
+本规划把上方 P0/P1/P2 问题整理成可执行依赖链。原则是：先恢复验收可信度，再修入口和并发，再修长期陪伴能力，最后补工具确认、WebUI 和感知增强。每一阶段完成后必须进入对应的仿真验证层，验证通过后才进入下一阶段。
 
----
+### 阶段 0：冻结目标与验收口径
 
-## 日志条目（按时间倒序，新的写在最上面）
+目标：确保后续所有修复都围绕“住在电脑里的亲密伴侣”展开，而不是把云汐推回工具助手。
 
-### [2026-04-15] Hardening 第一批修复：真实感知、Ollama、本地降级
+必须保持：
+- `DailyModeScenarioTester` 作为日常模式验收主框架。
+- `DEV_LOG.md` 只记录真实通过的验证结果，不再保留“预计完成”“理论完成”结论。
+- Phase 6 工厂模式继续冻结。
 
-**完成内容**：
-- `PerceptionCoordinator` 支持真实感知 provider，默认读取 Windows 前台窗口、用户 idle 时长、CPU 占用和当前时间；测试仍可注入固定快照。
-- `MCPClient` / `MCPHub` 增加公开工具名列表接口，`YunxiRuntime` 不再读取 `client._connections` 私有字段，也不再静默 `pass`。
-- `apps/daemon/main.py` 在启用工具时会初始化 Desktop MCP Server，并在 healthcheck/退出时释放 MCP 与 LLM 资源。
-- `PatternMiner` / `SkillLibrary` 增加模型不可用时的离线降级，不再因为 HuggingFace 网络受限导致 daemon 启动失败。
-- `LLMAdapter.from_env("ollama")` 支持本地 Ollama，不要求 API Key。
-- Ollama Provider 改为原生 `/api/chat` 路径，并兼容 `OLLAMA_BASE_URL` 误设为 `/v1` 的情况。
-- 新增真实 Ollama 集成测试，会从本机 `/api/tags` 中选择实际存在的模型执行一次真实本地 LLM 对话。
-- Daemon 使用 `--provider ollama` 时默认采用 `lexical` embedding provider，避免日常启动依赖 HuggingFace 网络；后续再接 Ollama embedding 语义向量。
+通过标准：
+- `tests/integration/test_daily_mode_scenario_tester.py` 通过。
+- 行为检查器能识别内部字段泄露、工具化表达和过长输出。
 
-**本机 Ollama 探测结果**：
-- `gpt-oss:20b`
-- `qwen3:4b`
-- `qwen3-vl:8b`
+完成后进入：阶段 1。
 
-**已通过测试**：
-- `python -m pytest -q tests\unit\test_perception_coordinator.py tests\integration\test_phase4_runtime.py` → 5 passed
-- `python -m pytest -q tests\unit tests\integration\test_phase5_daily_mode.py` → 31 passed
-- `python -m pytest -q tests\domains\memory` → 23 passed
-- `python -m pytest -q tests\unit\test_execution_engine.py tests\integration\test_ollama_llm.py` → 6 passed
-- `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_ollama_llm.py` → 63 passed
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --disable-tool-use --skip-desktop-mcp` → 非沙箱真实运行通过
-- `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --provider ollama --disable-tool-use --skip-desktop-mcp` → 本地 Ollama 运行通过，且不触发 HuggingFace 请求
+### 阶段 1：恢复验收可信度
 
-**仍需继续修复**：
-1. HeartLake / HeartLakeUpdater 仍是规则化情感系统，下一步要改为事件评估结构。
-2. Continuity 仍未持久化，没有 open threads。
-3. Ollama 目前只接入 LLM；embedding 已有本地词面降级，但还未接入 Ollama 语义向量。
-4. Tray/WebUI 仍只是状态适配，不是真实服务。
+先修问题：
+- P0-01：修复 `test_moonshot_cloud_matrix.py` 空事件库，或直接迁移到 `DailyModeScenarioTester`。
+- P0-02：修复 `test_daemon_stability.py` 真实感知导致的挂起，改用 static/mock perception provider。
+- P2-03：把真实 LLM 测试从浅关键词验收升级为行为验收，至少检查反工具化、人格、系统字段不泄露。
 
----
+原因：
+- 如果 Moonshot 矩阵没有真正跑到 LLM，云端模型质量无法判断。
+- 如果 daemon 稳定性测试会挂住，后续所有入口和常驻能力都没有可信基线。
 
-### [2026-04-15] 模型策略修正：本地 Ollama 作为一等后端
+必须验证：
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py`
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama`
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot`
+- `python -m pytest -q tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"`
 
-**用户补充约束**：
-本机已经通过 Ollama 部署了本地模型，项目设计不能只围绕云端 LLM 或 HuggingFace 在线模型。云汐作为常驻本地电脑里的女友，应该优先考虑本地可用模型能力，并在需要时再切换云端模型。
+通过后可以进入：
+- 日常模式仿真验证 Layer 2（本地 Ollama + Moonshot）。
+- 阶段 2 的入口、飞书和并发修复。
 
-**设计修正**：
-- LLM 后端必须支持：`ollama`、`moonshot`、`minimax`、`openai`。
-- `ollama` 不要求 API Key，默认 base url 为 `http://localhost:11434`，优先走原生 `/api/chat`，不能假设本机 Ollama 一定启用了 OpenAI-compatible `/v1/chat/completions`。
-- 日常模式应允许 `--provider ollama`，并通过 `OLLAMA_MODEL` / `OLLAMA_BASE_URL` 选择本地模型。
-- 后续 embedding/记忆检索也要考虑 Ollama 本地 embedding 模型，例如 `nomic-embed-text`，不能只依赖 SentenceTransformer 在线下载。
-- 真实 LLM 验收后续应分两组：云端 Kimi/MiniMax 验收、本地 Ollama 验收。只有两者之一可用时，系统也必须能启动。
+未通过时禁止：
+- 宣布日常模式完成。
+- 新增工厂模式代码。
+- 用 mock 测试替代真实 LLM 结论。
 
-**已完成代码修正**：
-- `OpenAICompatibleProvider` 现在仅在存在 API Key 时发送 Authorization header，避免 Ollama 收到空 Bearer。
-- `LLMAdapter.from_env("ollama")` 已支持本地模型，不再强制要求 API Key，并走 Ollama 原生 `/api/chat`。
-- 新增单元测试覆盖 Ollama 配置读取。
+### 阶段 2：修 Runtime 单入口、飞书通道和常驻稳定性
 
-**后续仍需补齐**：
-1. 给真实 LLM 测试增加 Ollama 运行路径。
-2. 给 Memory/SkillLibrary 增加 Ollama embedding provider，而不仅是 SentenceTransformer + 词面 fallback。
-3. Daemon healthcheck 增加 `--provider ollama` 的本地运行验收。
+先修问题：
+- P0-03：飞书 WebSocket 线程回调必须投递到主 asyncio loop。
+- P0-04：Runtime 增加单入口异步锁或事件队列，串行化 `chat()` / `proactive_tick()`。
+- P0-08：飞书发送链路改 async，或用 `asyncio.to_thread()` 包裹同步 `requests`。
+- P0-09：`FeishuWebSocket.stop()` 完成 client 停止、线程 join 和超时告警。
+- P1-11：增加 self-message filter、TTL/LRU 去重，飞书导入延迟到 `--feishu-enable` 分支。
 
----
+原因：
+- 飞书是当前最接近日常真实入口的通道；如果收消息、回消息、主动消息任一环不可靠，日常模式仍只能算内部 demo。
+- Runtime 内部状态大量可变，没有并发保护会污染情绪、连续性和上下文。
 
-### [2026-04-15] 全阶段设计一致性复审：暂停扩展 Phase 5，进入 Hardening
+必须新增/修复测试：
+- 飞书线程回调测试：模拟 WebSocket 线程调用 `on_feishu_message()`，确认能安全进入主 loop 并调用 `runtime.chat()`。
+- Runtime 并发测试：多条用户消息 + proactive tick 同时发生时，continuity 顺序一致，未回复计数不乱。
+- 飞书发送失败降级测试：发送失败不能阻塞 Presence 主循环。
 
-**复审结论**：
-用户指出“不要把云汐做成高级脚本执行程序，而要符合住在电脑里的女友”是正确的。当前代码已经打通真实 LLM、MCP、Prompt、Runtime 的最小链路，但多个子系统仍是“能跑通的骨架”，不能按设计验收为完整实现。之前将状态表述为“Phase 5 已正式启动”可以保留为启动事实，但不能理解为 Phase 5 已完成或可继续进入后续 Phase。
+必须验证：
+- 阶段 1 的 Layer 2 真实 LLM 仿真仍通过。
+- 飞书桥接测试通过。
+- 手动开启时 `FEISHU_LIVE_TEST=1` 的飞书 live 主动发送通过。
 
-**Phase 0 / 代码守则问题**：
-- `src/core/execution/engine.py`、`src/core/mcp/hub.py`、`src/domains/memory/*`、`src/core/llm/*` 等核心接口仍大量使用 `Any`、裸 `Dict[str, Any]` 和 duck typing，违反“主要接口必须明确类型”的守则。
-- `src/core/runtime.py` 直接读取 `mcp_hub.client._connections` 私有字段，并在异常时 `pass`，违反封装边界和错误记录要求。
-- `src/core/execution/engine.py` 捕获 `Exception` 后直接返回用户可见文本，缺少结构化日志和分层错误上下文。
-- 多处 IO/外部操作缺少显式 timeout 或资源清理策略，尤其是 MCP stdio、桌面工具、SQLite、LLM 调用后的上层资源生命周期。
+通过后可以进入：
+- 日常模式仿真验证 Layer 3（真实通道验收）。
+- 阶段 3 的主动性、长期记忆和跨日模拟。
 
-**Phase 1 / MCP 工具层问题**：
-- 设计要求“所有日常工具全面 MCP 化”，但当前只实现 `desktop_server.py`，覆盖 screenshot、clipboard、notify、app/window；缺少 file、bash、browser、web page read、media 等 MCP Server。
-- `MCPHub` 的 DAGPlanner 当前只对已有 tool_call 做显式 depends_on 拓扑排序，没有实现“用户模糊意图 → 工具链规划”的能力。
-- SecurityManager 只有静态 read/write/execute/network 权限，没有结合具体参数做危险操作识别，也没有真正的用户确认通道；`ask` 现在只是作为错误返回给 LLM。
-- Desktop Server 中 `clipboard_*`、`desktop_notify` 捕获宽泛异常后返回字符串，缺少审计级错误结构；`app_launch_ui` 使用 `time.sleep` 和单次视觉差异判断，缺少重试/降级策略。
-- `UIADriver.launch_application()` 在找不到 PATH 时使用 `shell=True`，与安全模型不一致，应改为受控 allowlist 或显式确认。
+### 阶段 3：修主动性、长期关系记忆和连续性沉淀
 
-**Phase 2 / 执行引擎与对话验证问题**：
-- `YunxiExecutionEngine` 的工具循环能跑通，但错误恢复偏模板化，不会基于失败类型选择重试、换工具、询问用户或解释限制。
-- ConversationTester 仍以 MockLLM 为主，真实 LLM 测试存在但覆盖面不足；不能证明“真实回复质量”已满足设计。
-- PromptBuilder 注入了人格、情绪、记忆、感知、工具，但更像静态拼接器，没有对上下文冲突、过长记忆、工具能力边界做结构化压缩和优先级控制。
+先修问题：
+- P0-05：`recent_proactive_count` 改为按日期统计，跨天自动重置。
+- P0-07：偏好、共同经历、承诺从进程内列表改为持久化关系记忆。
+- P1-02：主动事件被选中后，将 `affect_delta` 应用到 HeartLake，并写入 continuity。
+- P1-03：普通聊天后自动抽取 open_threads、proactive_cues、偏好和承诺。
+- P1-12：补 `MemoryManager.close()`，统一关闭 PatternMiner / SkillLibrary / embedding 资源。
 
-**Phase 3 / 记忆系统与终身学习问题**：
-- `MemoryManager` 的偏好、经历、承诺仅保存在内存列表，未持久化；跨会话后“女友记忆”会丢失。
-- `PatternMiner` 依赖在线/本地 SentenceTransformer 初始化，缺少离线模型策略、初始化失败降级和后台学习调度。
-- `SkillDistiller` / `ParamFiller` 主要靠正则和硬编码规则，技能泛化能力有限；`ParamFiller` 还存在 `Dict[str, any]` 的错误类型。
-- `run_skill_learning_cycle()` 没有被 daemon/presence 调度；终身学习不是持续运行闭环。
-- 技能快速路径绕过 LLM 后返回固定口吻，容易把云汐退化为“执行脚本后说一句模板话”，需要让 LLM 参与最终表达或至少注入情感上下文。
+原因：
+- 女友感依赖长期细节和“记挂着上次没聊完的事”，不能只靠静态 persona prompt。
+- 主动预算不跨日重置会让云汐长期沉默；记忆不持久化会造成失忆感。
 
-**Phase 4 / 情感与主动性问题**：
-- `HeartLake` 当前是少数字段 + if/elif 阈值，不是完整情感动态模型；缺少事件评估、情绪惯性、关系语境、冲突情绪和恢复曲线。
-- `HeartLakeUpdater.on_user_input()` 通过 `claude/其他ai/别的ai` 关键词触发吃醋，属于硬编码人格反应。
-- `InitiativeEngine` 只是 cooldown + 事件阈值，不会结合未完成话题、用户当前工作负载、打扰成本、关系连续性做策略选择。
-- 主动消息内容走真实 LLM 是正确方向，但主动“判断”层仍偏脚本化。
+必须新增/修复测试：
+- 重启后记忆测试：写入偏好/承诺，关闭并重建 Runtime 后仍能召回。
+- 跨日预算测试：当天预算耗尽后，模拟第二天，主动预算恢复。
+- open thread 自动生成测试：用户说“明天提醒我”“下次再聊”后进入主动线索。
+- 事件情绪影响测试：选中事件后 HeartLake 状态出现对应变化。
 
-**Phase 5 / 日常模式问题**：
-- `apps/daemon/main.py` 只是最小 CLI daemon，主动消息只 `print`，没有真实托盘、桌宠、桌面通知或飞书/本地 UI 发送通道。
-- `apps/tray/web_server.py` 只是 RuntimeStatus dataclass，不是 Web server；Tray 面板未真正接入。
-- `CompanionContinuityService` 只有内存窗口和未回复计数，没有持久化、open threads、跨会话恢复。
-- 未完成 30 分钟/24 小时 daemon 稳定性测试。
+必须验证：
+- Layer 2 真实 LLM 仿真仍通过。
+- Layer 3 飞书通道仍通过。
+- 新增长程日常模拟 Layer 4：模拟一天或多天的早晨、工作、深夜、离开、回来、未回复克制、跨日预算和重启记忆。
 
-**修复顺序**：
-1. P0：补真实感知，让云汐能真实读取当前时间、前台窗口、idle、基础系统状态，而不是测试友好空快照。
-2. P0：清理 Runtime/MCP 私有字段访问和静默异常，补公开工具列表接口。
-3. P0：把 HeartLakeUpdater 的关键词触发改为事件评估结构，至少先从硬编码词表迁移到可扩展 appraisal。
-4. P1：让 Continuity 持久化，并引入 open threads。
-5. P1：补真实 Tray/Web server 和 daemon 长时间稳定性测试。
-6. P1：补 MCP 工具层缺口和用户确认通道。
-7. P1：补 Memory 持久化、离线模型/初始化失败降级、学习周期调度。
-8. P2：逐步替换裸 dict/Any 为 dataclass 或 TypedDict，减少规则模板化回复。
+通过后可以进入：
+- 阶段 4 的工具确认和错误人格化。
 
-**当前决策**：
-暂停继续扩展 Phase 5，不进入 Phase 6。先逐项修复上述问题，修复一项就补测试并更新本日志。
+### 阶段 4：修日常工具确认和用户可见错误人格化
 
----
+先修问题：
+- P0-06：实现统一 pending tool confirmation 协议。
+- P0-10：所有用户可见错误改为云汐人格化表达，技术细节只进日志。
+- P1-04：技能快速路径只负责执行，工具结果回到 LLM 做最终自然表达，或纳入 HeartLake/relationship/context 生成。
+- P1-08：LLM provider 增加错误类型、`max_retries`、退避重试和可观测日志。
+- P1-09：MCP connect/list_tools/call_tool 增加 timeout；未知工具也转为结构化 ToolChainResult 并审计。
+- P1-10：桌面工具补安全边界：截图路径限制、应用启动 allowlist 或确认、剪贴板读取隐私策略。
 
-### [2026-04-15] Phase 4 边界补齐 + 正式进入 Phase 5
+原因：
+- daily_mode 下 WRITE/EXECUTE 工具当前会变成安全错误，用户体验是“云汐想帮忙但总失败”。
+- 出错时不能暴露 `[工具执行遇到问题]` 或 `[云汐这里出了点小问题]` 这类工程模板。
 
-**决策**：
-选择“补齐边界”而不是继续合并到 Runtime。原因：Phase 5 需要 daemon/tray 长期运行，如果 Presence、Continuity、HeartLakeUpdater 继续散落在 Runtime 内，Runtime 会演变成新的上帝类，不利于稳定性测试与后续维护。
+必须新增/修复测试：
+- 工具确认测试：写剪贴板/启动应用进入 pending confirmation，经飞书或本地入口确认后继续执行。
+- 错误人格化测试：LLM 异常、工具异常、安全 ask、未知工具都返回自然表达。
+- provider 重试测试：临时网络错误触发重试，最终失败时错误类型可区分。
 
-**完成内容**：
-- ✅ 新增 `core/cognition/heart_lake/updater.py`：`HeartLakeUpdater`，集中处理用户输入、感知 tick、互动完成后的情感更新
-- ✅ 新增 `core/initiative/continuity.py`：`CompanionContinuityService`，维护最近 50 轮连续性窗口和未回复主动消息计数
-- ✅ 新增 `core/resident/presence.py`：`YunxiPresence`，负责后台 tick 和主动消息回调，不直接生成内容
-- ✅ `YunxiRuntime` 接入 HeartLakeUpdater / Continuity / Presence 所需边界：
-  - 被动聊天后写入连续性
-  - 主动消息写入连续性并计入未回复主动次数
-  - 连续 3 次主动未回复后抑制第 4 次主动触发
-- ✅ 新增 `apps/daemon/main.py`：日常模式 daemon 最小入口，支持 `--healthcheck`
-- ✅ 新增 `apps/tray/web_server.py`：Runtime 状态快照适配，供 Tray/WebUI 使用
-- ✅ 新增 Phase 5 最小闭环测试 `tests/integration/test_phase5_daily_mode.py`
+必须验证：
+- Layer 2/3/4 继续通过。
+- 工具确认链路至少有一个真实入口能闭合。
 
-**真实测试结果**：
-- ✅ `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py` → 60 passed
-- ✅ `python -m pytest -q tests\integration\test_mcp_desktop.py` → 5 passed
-- ✅ `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py tests\integration\test_end_to_end_llm.py` → 5 passed（真实 Moonshot/Kimi + MCPHub）
-- ✅ `$env:PYTHONPATH='D:\yunxi3.0\src'; python -m apps.daemon.main --healthcheck --disable-tool-use` → 通过，输出 `daily_mode` 状态快照
+通过后可以进入：
+- 阶段 5 的 WebUI/Tray 和感知增强。
 
-**当前判断**：
-Phase 4 设计边界已补齐，Phase 5 已正式启动并完成最小日常闭环：Runtime 可记录连续性，Presence 可驱动主动 tick，Tray 可读取状态，daemon 可构建真实 Runtime 并完成健康检查。
+### 阶段 5：补真实日常入口、Tray/WebUI 和分层感知
 
-**下一步**：
-1. 增加 daemon 30 分钟稳定性测试。
-2. 将 `apps/tray/web_server.py` 从状态适配扩展为真实 HTTP 服务。
-3. 扩大真实 LLM 日常模式回归用例，覆盖记忆闭环、连续性上下文和主动消息冷静期。
+先修问题：
+- P1-06：Perception provider 分层，基础感知、慢速外部感知、可选隐私感知分别带 timeout 和降级。
+- P1-07：实现真实本地 WebUI 或系统托盘入口，支持 chat、主动消息展示、工具确认、状态查看。
+- P2-05：增加 `--healthcheck-deep`，覆盖 LLM ping、memory init/close、event library、continuity read/write、optional feishu config。
+- P2-04：把 `data/relationship/user_profile.md` 改成真实中文 Markdown，保留转义加载兼容。
+- P2-01 / P2-02：逐步用 dataclass / Protocol / TypedDict 替换核心裸 `Any` / `Dict`，并减少宽泛异常。
 
-**阻塞**：无
+原因：
+- 飞书不是唯一入口；本地入口缺失会导致 daemon 在非飞书模式下只能 print。
+- 感知太薄会削弱“住在电脑里”的真实感，但感知增强必须先有超时、隐私和降级边界。
 
----
+必须新增/修复测试：
+- WebUI/Tray smoke test：能发 chat、显示主动消息、提交工具确认。
+- deep healthcheck 测试：能发现 LLM、memory、event library、continuity 和飞书配置问题。
+- 感知 timeout 测试：慢 provider 不阻塞整轮聊天。
 
-### [2026-04-15] Phase 4 核心链路真实 LLM 行为验收通过
+必须验证：
+- 日常模式全量仿真矩阵通过。
+- daemon 短跑/长跑稳定性通过。
+- 至少一个真实入口完成 chat + 主动消息 + 工具确认。
 
-**完成内容**：
-- ✅ 修复测试基础设施：`pytest.ini` 新增 `pythonpath = src`，避免手动设置 `PYTHONPATH`
-- ✅ 修复感知测试注入：`PerceptionCoordinator.inject_snapshot()` 的注入快照现在能保留到下一次 `update()`，避免被默认采集覆盖
-- ✅ 修复主动性链路：`YunxiExecutionEngine.respond()` 在 `user_input=""` 的主动触发场景不再尝试技能快速路径，避免未初始化技能库导致主动消息丢失
-- ✅ 修复主动消息上下文重复写入：`YunxiRuntime.proactive_tick()` 不再在 Engine 已记录 assistant 消息后重复写入
-- ✅ Runtime 初始化时自动将 `MCPHub.audit.memory_manager` 绑定到当前 `MemoryManager`，保证 MCP 审计具备写入经验池的通路
-- ✅ 新增 `tests/unit/test_perception_coordinator.py`，覆盖感知注入 one-shot 行为
-- ✅ 新增 `tests/integration/test_phase4_runtime.py`，覆盖感知进入 prompt、主动消息只记录一次
-- ✅ 新增 `tests/integration/test_phase4_real_llm_behavior.py`，使用真实 Moonshot/Kimi 验证记忆、感知、情感和主动性是否真实影响生成
+通过后可以进入：
+- 日常模式完成候选验收。
 
-**真实测试结果**：
-- ✅ `python -m pytest -q tests\unit tests\domains\memory tests\integration\test_conversation_tester_baseline.py tests\integration\test_phase4_runtime.py` → 50 passed
-- ✅ `python -m pytest -q tests\integration\test_mcp_desktop.py` → 5 passed
-- ✅ `python -m pytest -q tests\integration\test_phase4_real_llm_behavior.py` → 3 passed（真实 Moonshot/Kimi）
-- ✅ `python -m pytest -q tests\integration\test_end_to_end_llm.py` → 2 passed（真实 Moonshot/Kimi + MCPHub + Desktop Server）
+### 日常模式完成候选验收门槛
 
-**遇到的问题与修复**：
-1. 沙箱环境会拦截 HuggingFace 模型下载和 Windows named pipe，导致测试误报失败。已在非沙箱环境重跑并确认真实通过。
-2. `ConversationTester` 原本默认初始化 `MemoryManager` 的语义模型，导致 Mock 对话测试依赖外部模型下载。已关闭测试 Runtime 的技能快速路径，Mock 对话测试不再依赖 HuggingFace。
-3. 主动触发时 `user_input=""` 仍进入技能快速路径，导致 Engine 返回错误但不写入上下文。已改为只有非空用户输入才尝试技能快速路径。
+只有同时满足以下条件，才允许把 Phase 5 标记为完成，并讨论是否进入 Phase 6：
 
-**当前判断**：
-Phase 3 基本实现并通过测试；Phase 4 的核心用户可见链路（情感、感知、记忆、主动性进入真实 LLM 生成）已经通过真实 LLM 验收。按原设计文档，`Presence`、`Continuity`、`HeartLakeUpdater` 的独立模块边界仍需补齐或明确合并到 Runtime 的设计决策。
-
-**下一步**：
-1. 补齐或正式调整 Phase 4 设计边界：Presence / Continuity / HeartLakeUpdater。
-2. 进入 Phase 5 前，补日常模式 daemon/tray/runtime 全链路测试。
-
-**阻塞**：无
+1. 本地 Ollama 与 Moonshot 的 Layer 2 日常仿真全部通过。
+2. Layer 3 飞书 live 主动发送在手动开启时通过。
+3. Layer 4 长程日常模拟通过，覆盖未回复克制、跨日预算、重启记忆。
+4. daemon stability 不挂起，短跑和长跑结果可信。
+5. Runtime 并发测试通过。
+6. 飞书真实入口能稳定收消息、调用 Runtime、回消息、发送主动消息。
+7. 工具确认链路闭合，WRITE/EXECUTE 不再直接变成安全错误。
+8. 用户可见错误不暴露工程模板、内部字段或系统栈信息。
+9. 长期关系记忆重启后不丢失。
+10. `DEV_LOG.md` 记录了真实命令、模型、通过结果和剩余风险。
 
 ---
 
-### [2026-04-15] Phase 2 完成 + 真实 LLM 端到端验证通过
+## 当前禁止事项
 
-**完成内容**：
-- ✅ 更新 `CODE_QUALITY_GUIDELINES.md`，新增"诚实报告问题、测试失败立即解决"和"云汐不是死板脚本执行程序"两条最高约束
-- ✅ 新建 `src/core/types/message_types.py`，定义统一消息类型
-- ✅ 实现 `src/core/execution/engine.py`：YunxiExecutionEngine、ConversationContext、EngineConfig、ExecutionResult
-- ✅ 实现 `src/core/prompt_builder.py`：YunxiPromptBuilder
-- ✅ 实现 `src/core/runtime.py`：YunxiRuntime
-- ✅ 实现最小子系统 stub：MemoryManager、HeartLake、PerceptionCoordinator
-- ✅ 实现 `tests/integration/conversation_tester.py`：YunxiConversationTester
-- ✅ 新增 `src/core/llm/provider.py` + `adapter.py`：支持 OpenAI 兼容格式（Kimi/Moonshot、MiniMax）
-- ✅ 编写并通过 `tests/unit/test_execution_engine.py`（4）
-- ✅ 编写并通过 `tests/unit/test_prompt_builder.py`（7）
-- ✅ 编写并通过 `tests/integration/test_conversation_tester_baseline.py`（5）
-- ✅ 编写并通过 `tests/integration/test_end_to_end_llm.py`（2）——使用真实 Kimi API，验证 screenshot 和 clipboard 工具链
-- ✅ 全量回归：30 个测试全部通过
-
-**遇到的问题与修复**（诚实报告）：
-1. **MiniMax Token Plan API 间歇性不稳定**：直接调用有时返回 `choices: null`。确认 API key 属于 `api.minimaxi.com`（中国站），但后端返回空结果频率高 → 切换至用户提供的 **Kimi (Moonshot) API** 进行端到端验证
-2. **Adapter 未正确处理 OpenAI function calling 的消息格式**：
-   - `AssistantMessage` 包含 `ToolUseBlockData` 时，adapter 原先丢弃了 tool_use 信息，导致 assistant message 的 content 为空，Moonshot 返回 400 `assistant message must not be empty` → 在 `Message` 中新增 `tool_calls` 字段，adapter 将 `ToolUseBlockData` 正确转换为 OpenAI tool_calls 格式
-   - `ToolResultContentBlock` 被包装在 `UserMessage` 中，但 OpenAI 协议要求后续消息必须是 `role: tool` 且带有 `tool_call_id` → 修改 adapter，将 `ToolResultContentBlock` 列表拆分为多个 `role="tool"` 的 Message
-3. **`RuntimeContext.mode` 值与 `SecurityManager` 不匹配**：`RuntimeContext` 默认 `mode="daily"`，但 `SecurityManager` 的 override/policy key 是 `"daily_mode"`，导致 tool override 未生效 → 将 `RuntimeContext` 和 `YunxiRuntime` 的 mode 统一为 `"daily_mode"`
-4. **`MessageRole` Enum 缺少 `TOOL` 成员**：adapter 尝试创建 `MessageRole("tool")` 时抛出 `ValueError` → 添加 `TOOL = "tool"`
-
-**当前状态**：Phase 2 全部交付物已实现并通过测试，**真实 LLM + MCPHub + Desktop Server 的端到端链路已跑通**。满足 MASTER_EXECUTION_PLAN 中 Phase 2 的所有验收标准。
-
-**下一步**：进入 Phase 3 —— 记忆系统与终身学习。
-
-**阻塞**：无
-
----
-
-### [2026-04-15] Phase 2 执行引擎与对话验证框架完成
-
-**完成内容**：
-- ✅ 更新 `CODE_QUALITY_GUIDELINES.md`，新增"诚实报告问题、测试失败立即解决"和"云汐不是死板脚本执行程序"两条最高约束
-- ✅ 新建 `src/core/types/message_types.py`，定义统一消息类型（UserMessage、AssistantMessage、ToolResultContentBlock 等）
-- ✅ 实现 `src/core/execution/engine.py`：YunxiExecutionEngine、ConversationContext、EngineConfig、ExecutionResult
-- ✅ 实现 `src/core/prompt_builder.py`：YunxiPromptBuilder（含 failure_hints section、感知增强、情感指引、工具列表）
-- ✅ 实现 `src/core/runtime.py`：YunxiRuntime，统筹 Engine + PromptBuilder + 各子系统快照
-- ✅ 实现最小子系统 stub：MemoryManager、HeartLake、PerceptionCoordinator，使 Phase 2 测试可独立运行
-- ✅ 实现 `tests/integration/conversation_tester.py`：YunxiConversationTester（含 MockLLM、状态注入、剧本模式）
-- ✅ 编写 `tests/unit/test_execution_engine.py`（4 用例通过）
-- ✅ 编写 `tests/unit/test_prompt_builder.py`（7 用例通过）
-- ✅ 编写 `tests/integration/test_conversation_tester_baseline.py`（5 用例通过）
-- ✅ 全量回归：Phase 1 的 12 个测试 + Phase 2 的 16 个测试全部通过
-
-**遇到的问题与修复**（诚实报告）：
-1. `src/core/types/` 目录不存在 → 创建目录后再写文件
-2. `prompt_builder.py` 中 `_build_identity_section` 的字符串包含未转义的中文引号 `"作"`，导致 `SyntaxError` → 改为单引号 `'作'`
-3. `ConversationTester` 的 `MockLLM` 在 `__init__` 中预填充了一条默认回复，导致各测试添加的后续回复被排在后面，`llm.complete()` 始终返回默认回复而非测试期望的回复 → 移除默认回复，改由 `reset()` 同时清空 mock LLM 状态，并让每个测试显式添加所需回复
-
-**当前状态**：Phase 2 全部交付物已实现并通过测试，满足 MASTER_EXECUTION_PLAN 中 Phase 2 的验收标准。
-
-**下一步**：进入 Phase 3 —— 记忆系统与终身学习。
-
-**阻塞**：无
-
----
-
-### [2026-04-15] Phase 1 MCP 基础设施测试全部通过
-
-**完成内容**：
-- ✅ 实现 `core/mcp/client.py`（MCP stdio Client 封装，支持多 Server 连接、统一工具发现与调用）
-- ✅ 实现 `core/mcp/hub.py`（MCPHub，整合安全校验、DAG 规划、执行与审计）
-- ✅ 实现 `core/mcp/security.py`（SecurityManager，四级权限模型 + 模式策略 + 工具级覆盖）
-- ✅ 实现 `core/mcp/audit_logger.py`（JSONL 审计日志，支持按日期分文件）
-- ✅ 实现 `core/mcp/planner.py`（DAGPlanner 骨架，支持拓扑排序）
-- ✅ 实现 `core/tools/desktop/uia_driver.py` 与 `visual_assertion.py`
-- ✅ 实现 `core/mcp/servers/desktop_server.py`（FastMCP Desktop Server，支持截图、剪贴板、通知、UIA）
-- ✅ 编写并跑通 `tests/unit/test_mcp_security.py`（7 passed）
-- ✅ 编写并跑通 `tests/integration/test_mcp_desktop.py`（5 passed，包含真实 stdio server 启动与工具调用）
-- ✅ 修复 pytest-asyncio 跨任务清理问题，创建 `pytest.ini` 统一配置
-
-**当前状态**：Phase 1 P0 门槛（MCPHub 通过真实 clipboard 与 screenshot 测试）已达成。
-
-**下一步**：
-1. 完善 DAGPlanner 的循环检测与并行执行能力
-2. 补充 Desktop Server 的更多边界测试
-3. 进入 Phase 2：执行引擎与对话验证框架
-
-**阻塞**：无
-
----
-
-### [2026-04-14] Phase 0 完成 → 进入 Phase 1
-
-**完成内容**：
-- ✅ 初始化 yunxi3.0 完整目录结构（src/core/mcp/servers, src/core/tools/desktop, src/core/security, src/factory/templates 等）
-- ✅ 创建 `requirements.txt`，包含 mcp, fastmcp, pyperclip, uiautomation, opencv-python, Pillow, sentence-transformers, scikit-learn, networkx, pystray, aiohttp 等核心依赖
-
-**当前状态**：Phase 0 基建完成，正式进入 Phase 1 代码实现阶段。
-
-**下一步**：按顺序实现：
-1. `core/mcp/client.py` — MCP stdio Client 封装
-2. `core/mcp/hub.py` — MCPHub
-3. `core/mcp/security.py` — SecurityManager
-4. `core/mcp/audit_logger.py` — AuditLogger
-5. `core/mcp/planner.py` — DAGPlanner
-6. `core/tools/desktop/uia_driver.py` — UIADriver
-7. `core/tools/desktop/visual_assertion.py` — VisualAssertion
-8. `core/mcp/servers/desktop_server.py` — Desktop MCP Server
-
-**阻塞**：无
-
----
-
-### [2026-04-14] Phase 0 - 设计文档全部完成
-
-**完成内容**：
-- ✅ 完成全部设计文档（MIGRATION_PLAN, TOOLS_REFACTOR, FACTORY_MODE, MEMORY_INTEGRATION, EXECUTION_ENGINE, PROMPT_BUILDER, MASTER_EXECUTION_PLAN）
-- ✅ 完成 `CODE_QUALITY_GUIDELINES.md`
-- ✅ 完成 `DEV_LOG.md`
-
-**当前状态**：设计阶段全部结束，准备进入代码实现。
-
----
-
-## 快速检查清单（每次对话开始时自答）
-
-- [ ] 我已阅读了本文件的"当前快照"
-- [ ] 我知道当前处于哪个 Phase
-- [ ] 我知道下一步要做什么
-- [ ] 如果有阻塞项，我已确认阻塞是否已解除
-
----
-
-## 附录：Phase 定义速查
-
-| Phase | 名称 | 核心交付物 |
-|-------|------|-----------|
-| Phase 0 | 基础准则与开发基建 | 设计文档、开发日志、目录结构、依赖配置 |
-| Phase 1 | MCP 基础设施与工具层骨架 | MCP Client/Hub/Security/Audit、UIA 基础、Desktop Server |
-| Phase 2 | 执行引擎与对话验证框架 | YunxiExecutionEngine、PromptBuilder、ConversationTester |
-| Phase 3 | 记忆系统与终身学习 | SkillLibrary、PatternMiner、FailureReplay、Audit→Experience 联动 |
-| Phase 4 | 情感系统修复与主动性重建 | HeartLakeUpdater、InitiativeEngine、Presence 简化 |
-| Phase 5 | 日常模式端到端闭环 | YunxiRuntime、Daemon 适配、Tray 适配、全链路回归 |
-| Phase 6 | 工厂模式核心引擎 | FactoryEngine、DAGScheduler、ClaudeWorker、Workspace |
-| Phase 7 | 工厂监控与项目模板 | FactoryDashboard、PythonDesktopTemplate |
-| Phase 8 | 工厂多 Worker 并行与桌宠验证 | 多 Worker 并行、Merge 冲突、yunxi-pet 完整执行、人工验收 |
-| Phase 9 | 工程收尾与文档固化 | 20+ 端到端测试、24h 稳定性测试、文档更新 |
-
----
-
-*最后更新：2026-04-16*
-*下次必读时间：每次新对话开始时*
+- 禁止直接进入 Phase 6 工厂模式。
+- 禁止再次把 P0-E 标记为完成，直到真实 LLM 矩阵和 daemon 稳定性通过。
+- 禁止用只跑函数是否成功的测试替代真实 LLM 行为验收。
+- 禁止为了推进进度把云汐写成工具调度器、脚本执行器或客服助手。
+- 禁止新增大功能前继续堆叠未关闭的 Runtime/入口/记忆/主动性技术债。

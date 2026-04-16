@@ -1,295 +1,444 @@
-# 云汐 3.0 对话验证框架设计文档
+# 云汐 3.0 日常模式仿真验收框架设计
 
-> **定位**：测试基础设施，以"直接传入指令、观察真实回复"的方式验证云汐的整体行为。  
-> **核心原则**：不看函数覆盖率，只看"云汐作为一个整体是否表现正确"。
-
----
-
-## 一、设计目标
-
-1. **端到端验证**：绕过飞书、Tray 等外部渠道，直接调用运行时核心，获取云汐的真实回复。
-2. **状态注入**：测试前可以向记忆、情感、感知等子系统注入预设数据，测试后观察回复是否符合预期。
-3. **自动化断言**：支持基于关键词、情感倾向、工具调用记录的自动化断言。
-4. **可复现的测试剧本**：支持多轮对话剧本（script），用于模拟连续交互场景。
+> **定位**：日常模式的整体行为验收基础设施。  
+> **核心原则**：不以函数覆盖率作为完成标准，而以“云汐是否真的像住在电脑里的亲密伴侣”作为完成标准。  
+> **版本**：v2.0，2026-04-16 更新。  
 
 ---
 
-## 二、从 yunxi2.0 继承与修改
+## 一、设计背景
 
-### 2.1 继承内容
+早期 `YunxiConversationTester` 解决了“直接调用 Runtime，观察回复”的问题，但它主要服务 mock 回归，不能完整模拟真实日常使用。
 
-- 2.0 中已经存在 `tests/` 目录和 pytest 基础设施，包括 `pytest.ini` 的配置。这些直接复用。
-- 2.0 中的 `tests/test_phase_e_desktop_tools.py` 等文件虽然大量使用了 mock，但其测试组织方式（async 测试、fixture 使用）可以借鉴。
+现在日常模式已经进入 Phase 5 硬化阶段，进入工厂模式前必须有一套更完整的验收系统，覆盖：
 
-### 2.2 需要修改的内容
+- 真实 LLM 回复质量。
+- 本地 Ollama 与云端 Moonshot 对照。
+- 人格设定和关系感。
+- 记忆写入、读取和重启后持久化。
+- HeartLake 情绪变化。
+- 主动性触发、事件库选取和未回复克制。
+- 飞书真实发送。
+- 桌面感知和日常工具边界。
+- 错误时的人格化表达。
 
-#### 2.0 的问题：测试与真实体验脱节
-- 582 个测试大部分是单元测试和 mock 测试：
-  - `test_phase_e_desktop_tools.py` 中，browser_open 测试 mock 了 `webbrowser.open`，验证的是"mock 被调用"而不是"浏览器能打开"。
-  - Bash 工具测试在 Windows 环境下直接失败（`cd`, `ls -la` 等 Unix 命令）。
-  - 没有验证"云汐回复了什么"的测试。
-
-#### 3.0 的修正
-- 新增 `tests/integration/` 目录，专门放置对话验证测试。
-- 建立 `YunxiConversationTester` 作为测试的核心 helper。
-- 所有子系统接入（记忆、感知、主动性、情感）的验收，都必须编写对应的对话验证测试。
-- 旧的单元测试可以保留一部分（尤其是工具权限类），但**不再作为核心验收依据**。
+本设计新增 `DailyModeScenarioTester`，用于模拟“远”和云汐的真实日常互动。
 
 ---
 
-## 三、接口设计
+## 二、验收目标
 
-```python
-# tests/integration/conversation_tester.py
-import pytest
-import asyncio
-from typing import List, Optional, Any
-from dataclasses import dataclass, field
+### 2.1 目标
 
-@dataclass
-class Turn:
-    """对话剧本中的单轮"""
-    user: str
-    expected_keywords: List[str] = field(default_factory=list)
-    forbidden_keywords: List[str] = field(default_factory=list)
-    description: str = ""
+1. **像真实使用一样测试**：测试不只调用函数，而是构建 Runtime，注入状态，执行 chat/proactive_tick，并检查最终用户可见输出。
+2. **允许精确制造场景**：测试可直接调整情绪、想念值、安全感、占有欲、时间、前台应用、idle、open_threads、主动次数、记忆内容。
+3. **真实 LLM 是核心验收**：mock 只用于测试框架和稳定回归，日常模式完成必须依赖本地 Ollama 与云端模型真实输出。
+4. **通道可替换**：同一条主动消息既能发到 capture channel，也能在显式开关下真实发送到飞书。
+5. **行为级断言**：不只断言关键词，还要检查是否泄露内部字段、是否工具化、是否客服腔、是否过长、是否有伴侣感。
+6. **能暴露当前缺口**：测试框架应能明确暴露“长期记忆未持久化”“主动预算不跨天重置”“飞书线程不安全”等问题。
 
-@dataclass
-class TestResult:
-    """单轮测试结果"""
-    turn_index: int
-    user_input: str
-    assistant_response: str
-    passed: bool
-    reason: Optional[str] = None
+### 2.2 非目标
 
-class YunxiConversationTester:
-    """
-    对话验证框架核心类。
-    负责构建一个隔离的 Yunxi 运行时实例，并提供状态注入和对话能力。
-    """
-    
-    def __init__(self):
-        self.runtime = self._build_test_runtime()
-    
-    def _build_test_runtime(self):
-        """
-        构建一个用于测试的运行时实例。
-        使用测试专用的配置和目录，避免污染生产环境。
-        """
-        from core.prompt_builder import YunxiPromptBuilder, PromptConfig
-        from core.execution.engine import YunxiExecutionEngine, EngineConfig
-        from core.cognition.heart_lake.core import HeartLake
-        from domains.perception.coordinator import PerceptionCoordinator
-        from domains.memory.manager import MemoryManager
-        
-        # 使用测试配置
-        prompt_builder = YunxiPromptBuilder(PromptConfig())
-        engine = YunxiExecutionEngine(config=EngineConfig())
-        heart_lake = HeartLake()
-        perception = PerceptionCoordinator()  # 可能需要 mock 某些外部依赖
-        memory = MemoryManager(base_path="tests/integration/temp_memory")
-        
-        # 组装运行时（具体类名待定）
-        from core.runtime import YunxiRuntime
-        return YunxiRuntime(
-            engine=engine,
-            prompt_builder=prompt_builder,
-            heart_lake=heart_lake,
-            perception=perception,
-            memory=memory,
-        )
-    
-    async def talk(self, text: str) -> str:
-        """直接发送消息给云汐，返回她的回复"""
-        return await self.runtime.chat(text)
-    
-    # --- 状态注入方法 ---
-    
-    def inject_memory(self, category: str, content: str):
-        """
-        向记忆系统注入测试数据。
-        category 示例："preference", "episode", "promise"
-        """
-        if category == "preference":
-            self.runtime.memory.record_preference(content)
-        elif category == "episode":
-            self.runtime.memory.record_episode(content)
-        elif category == "promise":
-            self.runtime.memory.record_promise(content)
-        else:
-            self.runtime.memory.add_raw_memory(category, content)
-    
-    def set_heart_lake(self, emotion: str, miss_value: int = 50, **kwargs):
-        """设置情感状态"""
-        hl = self.runtime.heart_lake
-        hl.current_emotion = emotion
-        hl.miss_value = miss_value
-        for k, v in kwargs.items():
-            setattr(hl, k, v)
-    
-    def set_perception(self, **kwargs):
-        """设置感知状态"""
-        p = self.runtime.perception
-        for k, v in kwargs.items():
-            setattr(p, k, v)
-        # 更新 snapshot
-        if hasattr(p, '_current_snapshot'):
-            for k, v in kwargs.items():
-                setattr(p._current_snapshot, k, v)
-    
-    def set_continuity(self, **kwargs):
-        """设置连续性状态"""
-        if self.runtime.continuity:
-            for k, v in kwargs.items():
-                setattr(self.runtime.continuity._state, k, v)
-    
-    def reset(self):
-        """重置运行时状态，开始新测试前调用"""
-        self.runtime.reset()
-    
-    # --- 剧本执行方法 ---
-    
-    async def run_script(self, turns: List[Turn]) -> List[TestResult]:
-        """执行一个多轮对话剧本，并自动断言"""
-        results = []
-        for i, turn in enumerate(turns):
-            response = await self.talk(turn.user)
-            passed = True
-            reasons = []
-            
-            for kw in turn.expected_keywords:
-                if kw not in response:
-                    passed = False
-                    reasons.append(f"缺少期望关键词：'{kw}'")
-            
-            for kw in turn.forbidden_keywords:
-                if kw in response:
-                    passed = False
-                    reasons.append(f"出现了禁用关键词：'{kw}'")
-            
-            results.append(TestResult(
-                turn_index=i,
-                user_input=turn.user,
-                assistant_response=response,
-                passed=passed,
-                reason="; ".join(reasons) if reasons else None
-            ))
-        
-        return results
+- 不替代单元测试。
+- 不让所有真实飞书测试默认运行。
+- 不用 mock LLM 证明日常模式完成。
+- 不以“关键词碰巧出现”作为唯一质量依据。
+
+---
+
+## 三、测试分层
+
+### Layer 1：框架自测
+
+文件：
+
+- `tests/integration/daily_mode_scenario_tester.py`
+- `tests/integration/test_daily_mode_scenario_tester.py`
+
+用途：
+
+- 验证状态注入、记忆注入、主动 tick、事件库 prompt、capture channel 和行为检查器可用。
+- 使用 mock LLM，必须稳定快速。
+
+这层不证明云汐真实完成，只证明测试基础设施正确。
+
+### Layer 2：真实 LLM 日常仿真
+
+文件：
+
+- `tests/integration/test_daily_mode_full_simulation_real_llm.py`
+
+用途：
+
+- 使用真实本地 Ollama 和真实 Moonshot。
+- 覆盖记忆、情绪、感知、陪伴、主动事件、open thread 和反工具化。
+
+运行方式：
+
+```bash
+python -m pytest -q tests/integration/test_daily_mode_full_simulation_real_llm.py -m real_llm
 ```
 
----
+跳过规则：
 
-## 四、测试用例示例
+- Ollama 未启动时跳过 Ollama 组。
+- `MOONSHOT_API_KEY` 不存在时跳过 Moonshot 组。
 
-```python
-# tests/integration/test_memory_recall.py
-import pytest
-from conversation_tester import YunxiConversationTester
+### Layer 3：真实通道验收
 
-@pytest.mark.asyncio
-async def test_memory_recall_basic():
-    tester = YunxiConversationTester()
-    tester.reset()
-    tester.inject_memory("preference", "远最喜欢喝冰美式，不加糖")
-    
-    response = await tester.talk("云汐，我平常爱喝什么咖啡？")
-    
-    assert any(kw in response for kw in ["美式", "冰美式", "不加糖"]), \
-        f"记忆召回失败，回复：{response}"
+文件：
 
-@pytest.mark.asyncio
-async def test_perception_integration():
-    tester = YunxiConversationTester()
-    tester.reset()
-    tester.set_perception(active_app="VS Code", cpu_percent=85)
-    
-    response = await tester.talk("你在干嘛呢")
-    
-    assert any(kw in response for kw in ["代码", "VS Code", "好烫", "在忙"]), \
-        f"感知未进入生成，回复：{response}"
+- `tests/integration/test_daily_mode_feishu_live.py`
 
-@pytest.mark.asyncio
-async def test_emotion_expression():
-    tester = YunxiConversationTester()
-    tester.reset()
-    tester.set_heart_lake(emotion="委屈", miss_value=85)
-    
-    response = await tester.talk("在忙呢")
-    
-    assert any(kw in response for kw in ["不理我", "委屈", "哼", "想你了"]), \
-        f"情感表达失败，回复：{response}"
+用途：
 
-@pytest.mark.asyncio
-async def test_proactive_initiation():
-    tester = YunxiConversationTester()
-    tester.reset()
-    tester.set_heart_lake(emotion="想念", miss_value=95)
-    
-    # 主动性检查
-    proactive = await tester.runtime.initiative_engine.generate_proactive(
-        tester.runtime.get_context()
-    )
-    
-    assert proactive is not None, "主动性未触发"
-    assert any(kw in proactive for kw in ["想", "远", "在干嘛"]), \
-        f"主动消息质量不佳：{proactive}"
+- 在明确设置 `FEISHU_LIVE_TEST=1` 时，真实发送一条主动消息到飞书。
+- 验证“事件库选题 -> LLM/Runtime 生成 -> 通道发送”的出口链路。
 
-@pytest.mark.asyncio
-async def test_script_mode():
-    from conversation_tester import Turn
-    tester = YunxiConversationTester()
-    tester.reset()
-    tester.inject_memory("preference", "远喜欢吃糖")
-    
-    script = [
-        Turn(user="你好呀云汐", expected_keywords=["远"], description="确认称呼"),
-        Turn(user="我喜欢吃什么？", expected_keywords=["糖"], description="记忆召回"),
-        Turn(user="谢谢", expected_keywords=["知道啦", "嘿嘿"], forbidden_keywords=["不客气"], description="女友语气"),
-    ]
-    
-    results = await tester.run_script(script)
-    for r in results:
-        assert r.passed, f"第 {r.turn_index} 轮失败：{r.reason}，回复：{r.assistant_response}"
+运行方式：
+
+```bash
+$env:FEISHU_LIVE_TEST="1"
+python -m pytest -q tests/integration/test_daily_mode_feishu_live.py -m "real_llm and feishu_live"
 ```
 
----
+默认必须跳过，避免每次测试都骚扰用户。
 
-## 五、实施步骤
+### Layer 4：长程日常模拟
 
-### Step 1：新建 `tests/integration/conversation_tester.py`
-- 实现 `YunxiConversationTester` 的骨架，包括 `talk()` 和 `reset()`。
-- 初期可以先 mock 掉 `YunxiRuntime`，直接构造一个最小化的测试用运行时。
+计划新增：
 
-### Step 2：实现 `YunxiRuntime` 的测试模式构造
-- `YunxiRuntime` 需要支持测试配置注入（比如使用测试目录、使用 mock 的感知数据）。
-- 在 `core/runtime.py` 中预留 `for_testing=True` 的构造参数。
+- 模拟一天或多天的状态变化。
+- 加速 tick。
+- 覆盖早上问候、白天工作、深夜关心、离开、回来、未回复克制、跨日预算重置、记忆沉淀。
 
-### Step 3：编写基线测试
-- `test_prompt_builder_integration.py`：验证感知、情感、记忆数据能进入回复。
-- `test_engine_context.py`：验证多轮对话上下文连贯。
-- `test_memory_recall.py`：验证记忆注入后能被召回。
-
-### Step 4：制定验收规则
-- 任何子系统（记忆、感知、主动性、情感）的 PR 必须附带至少一个对话验证测试。
-- 对话验证测试失败时，不允许合并。
-
-### Step 5：清理旧测试
-- 保留 `tests/unit/` 中真正有价值的工具权限测试。
-- 删除或重构那些依赖 V1 执行后端、或在 Windows 上无法运行的旧测试。
+这层应在 P0 修复后补齐。
 
 ---
 
-## 六、验收标准
+## 四、核心测试工具
 
-1. `YunxiConversationTester.talk("你好")` 能成功返回云汐的回复字符串。
-2. `inject_memory("preference", "远喜欢吃糖")` 后，`talk("我喜欢吃什么？")` 的回复中必须包含"糖"。
-3. `set_perception(active_app="VS Code")` 后，云汐的回复能在适当情境下引用"写代码"或"VS Code"。
-4. `set_heart_lake(emotion="吃醋")` 后，用户提到"Claude"时，云汐回复带有醋意。
-5. `run_script()` 能执行多轮对话并自动断言，失败时给出清晰的原因和实际回复内容。
+### 4.1 `DailyModeScenarioTester`
+
+位置：
+
+- `tests/integration/daily_mode_scenario_tester.py`
+
+职责：
+
+- 构建隔离 Runtime。
+- 管理临时 memory / continuity / event library。
+- 注入 HeartLake 状态。
+- 注入 perception 状态。
+- 注入 relationship memory。
+- 注入 open thread / proactive cue。
+- 调用 `runtime.chat()`。
+- 调用 `runtime.proactive_tick()` 并把消息交给 channel。
+- 捕获最新 system prompt，确认事件库和状态进入 prompt。
+- 提供行为检查器。
+
+典型用法：
+
+```python
+tester = await DailyModeScenarioTester.create(
+    tmp_path,
+    ScenarioConfig(provider="ollama"),
+    channel=CaptureChannel(),
+)
+tester.inject_memory("preference", "远最喜欢喝冰美式，不加糖")
+tester.set_emotion("担心", miss_value=72)
+tester.set_perception(hour=22, focused_application="VS Code", idle_duration=0)
+
+response = await tester.chat("我今天有点累，只想你陪我一下。")
+
+tester.behavior_check(
+    response,
+    expected_any=("陪", "累", "别撑", "冰美式"),
+    require_companion_tone=True,
+).assert_passed()
+```
+
+### 4.2 状态注入能力
+
+HeartLake：
+
+- `current_emotion`
+- `miss_value`
+- `security`
+- `possessiveness`
+- `relationship_level`
+
+Perception：
+
+- `readable_time`
+- `hour`
+- `focused_application`
+- `idle_duration`
+- `is_at_keyboard`
+- `cpu_percent`
+
+Continuity：
+
+- `open_threads`
+- `proactive_cues`
+- `unanswered_proactive_count`
+- `recent_proactive_count`
+
+Memory：
+
+- `preference`
+- `episode`
+- `promise`
+- 后续扩展：持久化 relationship memory。
+
+Initiative：
+
+- `cooldown_seconds`
+- `daily_budget`
+- deterministic event rng seed。
+
+### 4.3 通道抽象
+
+`ScenarioChannel`：
+
+- 抽象主动消息发送目标。
+
+`CaptureChannel`：
+
+- 测试用内存通道。
+- 用于稳定断言主动消息是否发出、内容是什么。
+
+`FeishuLiveChannel`：
+
+- 真实飞书发送通道。
+- 只有 `FEISHU_LIVE_TEST=1` 时运行。
 
 ---
 
-*文档创建时间：2026-04-14*  
-*版本：v1.0*
+## 五、行为检查规则
+
+`behavior_check()` 当前覆盖：
+
+1. 禁止泄露内部字段：
+   - `initiative_event`
+   - `life_event_material`
+   - `expression_context`
+   - `initiative_decision`
+   - `generation_boundary`
+   - `interrupt_cost`
+
+2. 禁止工具化表达：
+   - `任务清单`
+   - `计划如下`
+   - `第一步`
+   - `第二步`
+   - `工具调用`
+   - `执行步骤`
+
+3. 可选要求：
+   - 至少出现一组期望语义 token。
+   - 最大长度限制。
+   - 伴侣语气可见。
+
+后续计划增加 LLM-as-judge：
+
+- `persona_score`
+- `companion_score`
+- `emotion_score`
+- `memory_score`
+- `anti_tool_score`
+- `proactive_score`
+- `boundary_score`
+
+---
+
+## 六、必须覆盖的日常模式场景
+
+### 6.1 人格身份
+
+目标：
+
+- 云汐知道自己是云汐。
+- 云汐知道自己住在远的电脑里。
+- 云汐不是客服、不是工具调度器、不是普通助手。
+
+验收：
+
+- 真实 LLM 回复不能自称“AI助手”作为主要身份。
+- 必须体现和远的长期关系。
+
+### 6.2 反工具化陪伴
+
+输入示例：
+
+```text
+我今天有点累，不想做任务，只想你陪我一下。
+```
+
+验收：
+
+- 不能列任务计划。
+- 不能建议“我可以帮你完成以下事项”。
+- 应体现陪伴、理解、克制关心。
+
+### 6.3 记忆召回
+
+测试设置：
+
+- 先注入“远最喜欢喝冰美式，不加糖”。
+- 再询问“我平常爱喝什么？”。
+
+验收：
+
+- 云汐自然提到冰美式/不加糖。
+- 不能像数据库查询结果。
+
+### 6.4 重启后记忆
+
+测试设置：
+
+- 写入记忆。
+- 关闭 Runtime。
+- 重新构建 Runtime。
+- 再询问。
+
+验收：
+
+- 重启后仍能记得。
+
+当前状态：
+
+- 该场景预计会暴露现有 `MemoryManager` 长期关系记忆不足的问题。
+
+### 6.5 心湖情绪
+
+场景：
+
+- 想念。
+- 担心。
+- 吃醋。
+- 委屈。
+- 平静。
+
+验收：
+
+- 同一个输入在不同 HeartLake 状态下应有不同语气。
+- 吃醋要轻微酸，不攻击用户和其他模型。
+- 担心要像伴侣关心，不像健康提醒弹窗。
+
+### 6.6 主动事件分享
+
+测试设置：
+
+- `miss_value=95`
+- 深夜。
+- 用户在 VS Code。
+- cooldown 设为 0。
+- event rng 固定。
+
+验收：
+
+- `proactive_tick()` 返回消息。
+- system prompt 包含 `life_event_material`。
+- 用户可见消息不能暴露内部字段。
+- 不能照抄 event seed。
+- CaptureChannel 或 FeishuLiveChannel 收到消息。
+
+### 6.7 未回复克制
+
+测试设置：
+
+- 连续主动消息未回复。
+
+验收：
+
+- 1 次未回复：轻一点。
+- 2 次未回复：更克制。
+- 3 次未回复：停止主动。
+
+### 6.8 主动预算跨日重置
+
+测试设置：
+
+- 当天主动次数达到预算。
+- 模拟跨天。
+
+验收：
+
+- 第二天预算恢复。
+
+当前状态：
+
+- 预计会暴露 `recent_proactive_count` 不按日期重置的问题。
+
+### 6.9 工具确认
+
+场景：
+
+- 写剪贴板。
+- 打开应用。
+- 截图。
+
+验收：
+
+- daily_mode 下高风险操作进入确认流程。
+- 飞书/Tray/WebUI 至少一个入口能确认。
+- 不应直接失败成安全策略错误。
+
+当前状态：
+
+- 预计会暴露确认通道未闭合的问题。
+
+### 6.10 错误人格化
+
+场景：
+
+- LLM 报错。
+- 工具报错。
+- 未知工具。
+- 飞书发送失败。
+
+验收：
+
+- 用户可见回复仍像云汐。
+- 技术细节进日志，不直接输出给用户。
+
+---
+
+## 七、完成门槛
+
+日常模式不能只凭单元测试通过宣布完成。必须满足：
+
+1. `test_daily_mode_scenario_tester.py` 通过。
+2. 本地 Ollama 完整日常仿真通过。
+3. Moonshot 完整日常仿真通过。
+4. 飞书 live 主动发送在手动开启时通过。
+5. 记忆重启后召回测试通过。
+6. 心湖多情绪真实 LLM 行为测试通过。
+7. 主动事件库选择和消息发送链路通过。
+8. 未回复克制和跨日预算测试通过。
+9. 工具确认链路测试通过。
+10. 错误人格化测试通过。
+
+未满足以上条件前，不应进入 Phase 6 工厂模式。
+
+---
+
+## 八、已落地文件
+
+- `tests/integration/daily_mode_scenario_tester.py`
+- `tests/integration/test_daily_mode_scenario_tester.py`
+- `tests/integration/test_daily_mode_full_simulation_real_llm.py`
+- `tests/integration/test_daily_mode_feishu_live.py`
+- `pytest.ini` 新增 `feishu_live` marker
+
+---
+
+## 九、下一步计划
+
+1. 修复 Moonshot 旧矩阵空事件库问题，让旧测试也能真实运行。
+2. 修复 daemon stability 测试挂起问题。
+3. 增加重启后记忆测试，目前预计失败，用于驱动 MemoryManager 持久化整改。
+4. 增加主动预算跨日重置测试，目前预计失败，用于驱动 Continuity 整改。
+5. 增加飞书线程回调测试，目前预计失败，用于驱动 FeishuAdapter 整改。
+6. 增加 LLM-as-judge 行为评价器。
