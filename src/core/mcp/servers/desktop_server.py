@@ -132,7 +132,7 @@ def app_launch_ui(app_name: str) -> str:
         after = assertion.capture()
 
         changed = assertion.pixel_diff(before, after, threshold=0.02)
-        if changed:
+        if changed or _launch_success_detected(driver, app_name, result):
             return f"成功启动 {app_name}"
 
         last_error = (
@@ -145,6 +145,46 @@ def app_launch_ui(app_name: str) -> str:
         f"已尝试启动 {app_name}（{last_error}），"
         f"可能是应用不存在或启动速度过慢，建议手动检查"
     )
+
+
+def _launch_success_detected(driver: UIADriver, app_name: str, result: dict) -> bool:
+    """Detect launch success when the screen does not visibly change."""
+    if _matching_window_exists(driver, app_name):
+        return True
+    process_name = _process_name_from_launch(app_name, result)
+    if not process_name:
+        return False
+    try:
+        import psutil
+
+        expected = process_name.lower()
+        for proc in psutil.process_iter(["name"]):
+            name = (proc.info.get("name") or "").lower()
+            if name == expected or name == f"{expected}.exe":
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _matching_window_exists(driver: UIADriver, app_name: str) -> bool:
+    aliases = {
+        "notepad": ["notepad", "记事本", "untitled - notepad", "无标题 - 记事本"],
+        "calc": ["calculator", "计算器"],
+    }
+    keywords = aliases.get(app_name.lower(), [app_name])
+    return any(driver.find_window_by_title(keyword) is not None for keyword in keywords)
+
+
+def _process_name_from_launch(app_name: str, result: dict) -> str:
+    from pathlib import Path
+
+    resolved = result.get("resolved_path") if isinstance(result, dict) else None
+    source = str(resolved or app_name)
+    name = Path(source).name
+    if not name:
+        return ""
+    return name
 
 
 @mcp.tool()

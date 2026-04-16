@@ -7,6 +7,74 @@
 
 ---
 
+## [2026-04-16] 飞书日常模式 30 分钟浸泡测试通过
+
+**状态**：已完成阶段 6 后的首轮日常模式浸泡测试。飞书 live 主动发送、全量工具直接矩阵、飞书启用状态 deep healthcheck、30 分钟有界 daemon 稳定运行均通过。
+
+### 浸泡前验证
+
+- 飞书启用状态 full tool deep healthcheck：
+  - `$env:PYTHONPATH='src'; python src\apps\daemon\main.py --provider ollama --healthcheck-deep --skip-llm-ping --embedding-provider lexical --feishu-enable` -> passed
+  - `feishu_config=configured`
+  - `available_tools` 包含 Desktop、Filesystem/Document、Browser、GUI Agent 全部默认工具。
+- 全量工具直接矩阵：
+  - `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py tests\integration\test_daily_mode_desktop_tools_direct.py -m desktop_mcp` -> 8 passed
+- Phase 5 / daemon stability 非真实 LLM 回归：
+  - `python -m pytest -q tests\integration\test_phase5_daily_mode.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 12 passed
+- 飞书 live 主动发送：
+  - `$env:FEISHU_LIVE_TEST='1'; python -m pytest -q tests\integration\test_daily_mode_feishu_live.py -m "real_llm and feishu_live"` -> 1 passed
+
+### 浸泡执行
+
+- 启动命令：
+  - `set PYTHONPATH=src&& python src\apps\daemon\main.py --provider moonshot --feishu-enable --embedding-provider lexical --tick-interval 300 --run-seconds 1800`
+- 浸泡窗口：
+  - 开始：2026-04-16 17:51:30
+  - 结束：2026-04-16 18:21:39 左右自动关闭
+- 运行期间进程：
+  - main daemon 进程存活。
+  - Desktop / Filesystem / Browser / GUI Agent 四个 MCP server 进程均存活。
+  - 30 分钟结束后 daemon 和 MCP server 均退出，无残留。
+- 运行日志：
+  - `logs\daily_soak_20260416_175130.out.log`
+  - `logs\daily_soak_20260416_175130.err.log`
+
+### 浸泡期间观察
+
+- 飞书 WebSocket 成功启动并保持连接。
+- 日常模式 daemon 成功加载 Moonshot、Memory、Continuity、Event library、Feishu、MCP 工具层。
+- 运行中没有 Runtime 崩溃、MCP server 崩溃、资源关闭失败或 pending confirmation 堆积。
+- 日志中出现两类 lark SDK 噪声：
+  - `processor not found, type: im.message.message_read_v1`
+  - WebSocket 正常关闭时输出 `receive message loop exit ... sent 1000 (OK); then received 1000 (OK) bye`
+  - 这两项目前不影响文本消息接收、主动发送和 daemon 关闭，但后续可增加空 handler 或日志降噪。
+
+### 期间发现并修复
+
+- 全量工具矩阵中 `app_launch_ui(notepad)` 偶发失败：应用实际可启动，但工具只通过屏幕像素变化判断成功；当 Notepad 已打开或屏幕变化不明显时会误报失败。
+- 修复 `src/core/mcp/servers/desktop_server.py`：
+  - `app_launch_ui` 现在在视觉变化之外，还会检查匹配窗口和进程是否存在。
+  - `notepad` / `calc` 增加常见窗口标题别名。
+- 验证：
+  - `python -m py_compile src\core\mcp\servers\desktop_server.py` -> passed
+  - `python -m pytest -q tests\integration\test_daily_mode_desktop_tools_direct.py::test_yunxi_direct_launch_focus_and_minimize_notepad -m desktop_mcp` -> 1 passed
+  - 全量工具矩阵重跑 -> 8 passed
+
+### 浸泡后验证
+
+- 浸泡后再次执行飞书启用状态 full tool deep healthcheck：
+  - `$env:PYTHONPATH='src'; python src\apps\daemon\main.py --provider ollama --healthcheck-deep --skip-llm-ping --embedding-provider lexical --feishu-enable` -> passed
+  - `resource_close=passed`
+- 二次进程检查：未发现浸泡 daemon 或 MCP server 残留进程。
+
+### 结论
+
+日常模式已达到 v1 完成候选门槛：飞书入口、主动发送、全量默认 MCP 工具、工具确认协议、daemon 有界运行、资源关闭均通过验证。
+
+本轮浸泡未自动伪造“用户从飞书发入站消息”，因为飞书机器人 API 不能代表用户发送入站事件；真实入站聊天和飞书确认闭环已在前一轮 live 测试中通过，本轮主要验证阶段 6 工具扩展后的 daemon 稳定性。
+
+---
+
 ## [2026-04-16] 阶段 6 规划：电脑能力工具生态扩展，飞书浸泡测试后移
 
 **状态**：首版已落地并通过直接工具矩阵。此前飞书入口、Desktop MCP 基础工具和确认闭环已通过，但工具生态仍不足以支撑“住在电脑里的云汐”完整电脑能力，因此飞书日常模式浸泡测试后移到阶段 6 完成之后。
