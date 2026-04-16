@@ -32,10 +32,8 @@
 - `python -m pytest -q tests\unit\test_reaction_library.py tests\unit\test_prompt_builder.py` -> 12 passed
 - `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 22 passed
 - `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
-
-### 剩余验证
-
-- Moonshot 云端真实 LLM 回归尚未在本次动作中重跑；如要作为发布门槛，需要在允许联网环境下执行。
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot` -> 2 passed（真实 Moonshot，需要联网）
+- `python -m pytest -q tests\integration\test_moonshot_cloud_matrix.py -m real_llm` -> 6 passed（真实 Moonshot，需要联网）
 
 ---
 
