@@ -7,6 +7,53 @@
 
 ---
 
+## [2026-04-16] 阶段 2 完成：Runtime 单入口、飞书通道和常驻稳定性
+
+**状态**：已完成。阶段 2 目标是让真实入口不会因为线程、并发和同步发送阻塞破坏日常模式运行。
+
+### 完成内容
+
+- `YunxiRuntime` 新增单入口 `asyncio.Lock`，串行化 `chat()` 和 `proactive_tick()`，避免飞书消息、Presence 主动 tick、未来 Tray/WebUI 并发污染 `ExecutionEngine.context`、`HeartLake` 和 `Continuity`。
+- `FeishuAdapter` 支持绑定 daemon 主 asyncio loop：
+  - WebSocket 线程回调通过 `asyncio.run_coroutine_threadsafe()` 投递到主 loop。
+  - 同一 loop 内调用时使用 `create_task()`。
+  - 处理任务/future 异常会写日志，不再静默丢失。
+- 飞书发送链路改为 `asyncio.to_thread()` 包装同步 `requests`：
+  - 被动回复发送不阻塞主事件循环。
+  - 主动消息发送仍有锁，避免同一入口并发发送。
+  - 错误回复发送失败时只记日志，不反向打断 Runtime。
+- `FeishuWebSocket.stop()` 完成实际关闭流程：
+  - 优先调用底层 client 的 `stop()` / `close()`。
+  - 对 lark client 尝试调用私有 `_disconnect()` 并停止其 event loop。
+  - join WebSocket 线程，超时后写 warning。
+- 补齐飞书真实消息边界：
+  - 支持 `FEISHU_IGNORE_SENDER_IDS` / 构造参数忽略指定 sender，避免自消息循环。
+  - 消息去重从整表清空改为 TTL + LRU。
+  - daemon 顶部不再导入飞书模块，只有 `--feishu-enable` 分支才加载 `lark-oapi` 相关依赖。
+
+### 已验证
+
+- `python -m py_compile src\core\runtime.py src\interfaces\feishu\adapter.py src\interfaces\feishu\websocket.py src\apps\daemon\main.py tests\unit\test_feishu_adapter.py tests\unit\test_feishu_websocket.py tests\integration\test_phase4_runtime.py` -> passed
+- `python -m pytest -q tests\unit\test_feishu_adapter.py tests\unit\test_feishu_websocket.py tests\integration\test_phase4_runtime.py` -> 13 passed
+- `python -m pytest -q tests\unit` -> 56 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 22 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot` -> 2 passed（真实 Moonshot，需要联网）
+- `python -m pytest -q tests\integration\test_daily_mode_feishu_live.py -m "real_llm and feishu_live"` -> 1 skipped（未设置 `FEISHU_LIVE_TEST=1`，未误发真实消息）
+
+### 下一步
+
+进入阶段 3：主动性、长期关系记忆和连续性沉淀。
+
+优先处理：
+1. `recent_proactive_count` 改为按日期统计，跨天自动重置。
+2. 偏好、共同经历、承诺从进程内列表改为持久化关系记忆。
+3. 主动事件被选中后，将 `affect_delta` 应用到 HeartLake，并写入 continuity。
+4. 普通聊天后自动抽取 open_threads、proactive_cues、偏好和承诺。
+5. 补 `MemoryManager.close()`，统一关闭 PatternMiner / SkillLibrary / embedding 资源。
+
+---
+
 ## [2026-04-16] 完成：迁移 2.0 反应库为日常模式表达参考
 
 **状态**：已完成首版并通过本地真实 LLM 回归。用户反馈“针对我说话反应”仍显得规则化、死板；排查确认 3.0 当前回复生成虽走 LLM，但情绪表达指引主要依赖 `HeartLakeUpdater` 的规则触发和 `YunxiPromptBuilder._build_emotion_section()` 的少量硬编码提示。
@@ -150,14 +197,14 @@
 
 **日期**：2026-04-16  
 **阶段**：Phase 5 日常模式硬化中，尚不应进入 Phase 6 工厂模式。  
-**本次动作**：清理旧开发日志，记录日常模式整体大审查结果。  
+**本次动作**：阶段 2 已完成，下一步进入主动性、长期记忆和连续性沉淀。
 
 ### 当前结论
 
 - Phase 0-5 的骨架已经基本搭好：Runtime、PromptBuilder、LLMAdapter、MCPHub、Memory、HeartLake、Initiative、Presence、daemon、飞书通道、Ollama/Moonshot 接入均已有实现。
 - yunxi2.0 的关键资产已经迁入一部分：人格 profile、用户关系 profile、生活事件库、三层主动事件系统、表达上下文、continuity/open_threads。
-- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度，但还没有达到“入口可靠、并发安全、长期关系记忆、工具确认闭环”的完成标准。
-- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真和 Moonshot 旧矩阵已经通过；剩余阻塞集中在飞书入口、Runtime 并发、主动预算、长期记忆和工具确认。
+- 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程。
+- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真和 Moonshot 旧矩阵已经通过；剩余阻塞集中在主动预算、长期关系记忆、连续性自动沉淀和工具确认闭环。
 
 ### 进入工厂模式前的硬门槛
 
@@ -311,6 +358,8 @@
 - WebSocket 线程收到消息后用 `asyncio.run_coroutine_threadsafe()` 投递到主 loop。
 - 增加真实或半真实回归测试，覆盖线程回调到 `runtime.chat()` 的链路。
 
+当前状态：阶段 2 已修复。`FeishuAdapter` 支持绑定主 loop；WebSocket 线程回调通过 `run_coroutine_threadsafe()` 投递；`tests/unit/test_feishu_adapter.py` 覆盖线程回调进入主 loop 并调用 `runtime.chat()`。
+
 ### P0-04：Runtime 没有并发保护
 
 文件：`src/core/runtime.py`、`src/core/execution/engine.py`、`src/core/initiative/continuity.py`
@@ -328,6 +377,8 @@
 - Runtime 层增加单入口异步锁或事件队列。
 - 主动消息和用户消息必须统一排队。
 - 增加并发测试：多条飞书消息 + Presence tick 同时发生时上下文仍一致。
+
+当前状态：阶段 2 已修复。`YunxiRuntime` 使用单入口 `asyncio.Lock` 串行化 `chat()` 和 `proactive_tick()`；`tests/integration/test_phase4_runtime.py` 覆盖并发 chat、chat + proactive tick 不重入 LLM。
 
 ### P0-05：主动预算不是“每日预算”，会永久耗尽
 
@@ -402,6 +453,8 @@
 - 增加超时、重试和失败降级。
 - 主动消息失败不能影响 Runtime 主循环。
 
+当前状态：阶段 2 已修复主链路。`FeishuAdapter.handle_message()` 和 `send_proactive_message()` 已用 `asyncio.to_thread()` 包装同步发送；发送异常只写日志，不反向打断 Runtime。
+
 ### P0-09：FeishuWebSocket 停止逻辑不完整
 
 文件：`src/interfaces/feishu/websocket.py`
@@ -418,6 +471,8 @@
 修复要求：
 - 明确 lark client 的关闭 API。
 - stop 时关闭 client、等待线程退出、超时后记录警告。
+
+当前状态：阶段 2 已修复。`FeishuWebSocket.stop()` 会调用底层 client stop/close 或 lark `_disconnect()`，随后 join 线程并对超时写 warning；单元测试覆盖 stop 关闭 client 并回收线程。
 
 ### P0-10：错误回复破坏人格
 
@@ -624,6 +679,8 @@
 - 增加 self-message filter。
 - 用 TTL/LRU 去重。
 - 飞书相关导入延迟到 `--feishu-enable` 分支。
+
+当前状态：阶段 2 已修复本阶段边界项。`FeishuWebSocket` 支持忽略指定 sender，去重改为 TTL/LRU；daemon 飞书导入已延迟到 `--feishu-enable` 分支。`transport` 字段和 `proactive_callback` 参数清理仍作为后续低优先级接口整理。
 
 ### P1-12：Memory/SkillLibrary 资源生命周期不完整
 

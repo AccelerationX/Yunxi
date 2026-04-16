@@ -1,5 +1,6 @@
 """Phase 4 Runtime 行为回归测试。"""
 
+import asyncio
 import json
 import random
 
@@ -12,6 +13,35 @@ from domains.perception.coordinator import (
     TimeContext,
     UserPresence,
 )
+
+
+class SlowCountingLLM:
+    """Mock LLM that records whether runtime entries overlap."""
+
+    def __init__(self) -> None:
+        self.active_calls = 0
+        self.max_active_calls = 0
+        self.call_count = 0
+        self.history = []
+
+    async def complete(self, system: str, messages: list, tools=None):
+        self.call_count += 1
+        self.active_calls += 1
+        self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        self.history.append({"system": system, "messages": messages, "tools": tools})
+        try:
+            await asyncio.sleep(0.02)
+            return SlowCountingResponse(content=f"云汐串行回复 #{self.call_count}")
+        finally:
+            self.active_calls -= 1
+
+
+class SlowCountingResponse:
+    """Response object for SlowCountingLLM."""
+
+    def __init__(self, content: str = "") -> None:
+        self.content = content
+        self.tool_calls = []
 
 
 @pytest.mark.asyncio
@@ -115,3 +145,48 @@ async def test_proactive_tick_injects_life_event_material(tmp_path):
     assert "expression_context" in system_prompt
     assert "Yunxi wants to ask Yuan" in system_prompt
     assert "Do not copy it verbatim" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_runtime_serializes_concurrent_chat_entries():
+    tester = YunxiConversationTester()
+    tester.reset()
+    slow_llm = SlowCountingLLM()
+    tester.runtime.engine.llm = slow_llm
+
+    responses = await asyncio.gather(
+        tester.runtime.chat("第一条消息"),
+        tester.runtime.chat("第二条消息"),
+    )
+
+    assert len(responses) == 2
+    assert slow_llm.call_count == 2
+    assert slow_llm.max_active_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_serializes_chat_and_proactive_tick_entries():
+    tester = YunxiConversationTester()
+    tester.reset()
+    slow_llm = SlowCountingLLM()
+    tester.runtime.engine.llm = slow_llm
+    tester.set_heart_lake(emotion="想念", miss_value=95)
+    tester.runtime.perception.inject_snapshot(
+        PerceptionSnapshot(
+            time_context=TimeContext(readable_time="2026-04-16 23:30", hour=23),
+            user_presence=UserPresence(
+                focused_application="VS Code",
+                idle_duration=360,
+            ),
+        )
+    )
+
+    proactive_task = asyncio.create_task(tester.runtime.proactive_tick())
+    await asyncio.sleep(0)
+    chat_task = asyncio.create_task(tester.runtime.chat("你在吗？"))
+    proactive, chat_response = await asyncio.gather(proactive_task, chat_task)
+
+    assert proactive is not None
+    assert chat_response
+    assert slow_llm.call_count == 2
+    assert slow_llm.max_active_calls == 1

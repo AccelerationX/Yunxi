@@ -6,12 +6,10 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from apps.tray.web_server import RuntimeStatus, build_runtime_status
 from core.cognition.heart_lake.core import HeartLake
-from interfaces.feishu.adapter import FeishuAdapter
-from interfaces.feishu.websocket import FeishuWebSocket
 from core.execution.engine import EngineConfig, YunxiExecutionEngine
 from core.initiative.continuity import CompanionContinuityService
 from core.initiative.event_system import ThreeLayerInitiativeEventSystem
@@ -136,18 +134,24 @@ async def run_daemon(config: DaemonConfig) -> None:
     """启动日常模式 daemon。"""
     runtime = await build_runtime(config)
 
-    feishu_ws: Optional[FeishuWebSocket] = None
+    feishu_ws: Optional[Any] = None
 
     if config.feishu_enabled:
         # 使用飞书作为消息通道
+        from interfaces.feishu.adapter import FeishuAdapter
         from interfaces.feishu.client import get_feishu_client
+        from interfaces.feishu.websocket import FeishuWebSocket
 
         feishu_client = get_feishu_client()
         if not feishu_client.is_configured:
             print("[警告] 飞书未配置或配置不完整，将使用 print 模式", flush=True)
             config.feishu_enabled = False
         else:
-            adapter = FeishuAdapter(runtime=runtime, feishu_client=feishu_client)
+            adapter = FeishuAdapter(
+                runtime=runtime,
+                feishu_client=feishu_client,
+                event_loop=asyncio.get_running_loop(),
+            )
             proactive_cb = adapter.create_proactive_callback()
 
             async def on_proactive_message(message: str) -> None:

@@ -4,6 +4,7 @@
 提供统一的 `chat()` 入口和 `proactive_tick()` 主动触发入口。
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Optional
@@ -63,11 +64,17 @@ class YunxiRuntime:
         self.initiative_engine = initiative_engine or InitiativeEngine()
         self.mcp_hub = mcp_hub
         self._last_tick_time: float = time.time()
+        self._entry_lock = asyncio.Lock()
         if self.mcp_hub is not None and self.mcp_hub.audit.memory_manager is None:
             self.mcp_hub.audit.memory_manager = self.memory
 
     async def chat(self, user_input: str) -> str:
         """接收用户输入，返回云汐的回复。"""
+        async with self._entry_lock:
+            return await self._chat_unlocked(user_input)
+
+    async def _chat_unlocked(self, user_input: str) -> str:
+        """Run one chat turn while the runtime entry lock is held."""
         self.heart_lake_updater.on_user_input(user_input)
         self._tick_perception_and_emotion()
         context = self.get_context(user_input=user_input)
@@ -88,6 +95,11 @@ class YunxiRuntime:
 
     async def proactive_tick(self) -> Optional[str]:
         """无用户输入时的主动心跳，若触发主动对话则返回内容。"""
+        async with self._entry_lock:
+            return await self._proactive_tick_unlocked()
+
+    async def _proactive_tick_unlocked(self) -> Optional[str]:
+        """Run one proactive tick while the runtime entry lock is held."""
         events = self._tick_perception_and_emotion()
         decision = self.initiative_engine.evaluate(
             heart_lake=self.heart_lake,
