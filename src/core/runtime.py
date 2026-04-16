@@ -70,7 +70,7 @@ class YunxiRuntime:
         """接收用户输入，返回云汐的回复。"""
         self.heart_lake_updater.on_user_input(user_input)
         self._tick_perception_and_emotion()
-        context = self.get_context()
+        context = self.get_context(user_input=user_input)
         system_prompt = self.prompt_builder.build_system_prompt(context)
         result = await self.engine.respond(
             user_input=user_input,
@@ -174,7 +174,7 @@ class YunxiRuntime:
         )
         return events
 
-    def get_context(self) -> RuntimeContext:
+    def get_context(self, user_input: str = "") -> RuntimeContext:
         """从各子系统构建运行时上下文快照。"""
         perception_snapshot = self.perception.get_snapshot()
         memory_summary = self.memory.get_memory_summary(
@@ -200,6 +200,7 @@ class YunxiRuntime:
             continuity_summary=continuity_summary,
             available_tools=available_tools,
             factory_status=None,
+            user_input=user_input,
         )
 
     def reset(self) -> None:

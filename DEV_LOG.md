@@ -7,6 +7,38 @@
 
 ---
 
+## [2026-04-16] 完成：迁移 2.0 反应库为日常模式表达参考
+
+**状态**：已完成首版并通过本地真实 LLM 回归。用户反馈“针对我说话反应”仍显得规则化、死板；排查确认 3.0 当前回复生成虽走 LLM，但情绪表达指引主要依赖 `HeartLakeUpdater` 的规则触发和 `YunxiPromptBuilder._build_emotion_section()` 的少量硬编码提示。
+
+### 完成内容
+
+- 从 `D:\yunxi2.0\data\persona\reaction_library.json` 迁移反应库思路，但不直接搬运原始内容。
+- 新增 `data/persona/reaction_library.json`：
+  - 保留问候、想念、安慰、鼓励、玩笑、庆祝、修复、工作、夜间陪伴、轻微吃醋等日常反应类型。
+  - 移除原库中高亲密成人条目，并改写亲密/夜间类示例，确保默认日常模式不注入露骨内容。
+- 新增 `core.persona.reaction_library`：
+  - 负责加载结构化反应库。
+  - 按本轮用户输入和当前情绪检索反应参考。
+  - 输出只作为 LLM 表达姿态素材，不作为固定模板回复。
+- `RuntimeContext` 新增 `user_input`，`YunxiRuntime.chat()` 会把本轮用户输入传给 PromptBuilder。
+- `YunxiPromptBuilder` 新增【当前反应参考】section：
+  - 写入匹配场景、风格和少量表达温度参考。
+  - 明确要求“不要照抄示例、不要输出内部字段/触发词/匹配分数”。
+
+### 已验证
+
+- `python -m py_compile src\core\persona\reaction_library.py src\core\prompt_builder.py src\core\runtime.py tests\unit\test_reaction_library.py tests\unit\test_prompt_builder.py tests\integration\test_daily_mode_scenario_tester.py` -> passed
+- `python -m pytest -q tests\unit\test_reaction_library.py tests\unit\test_prompt_builder.py` -> 12 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 22 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed（真实本地 Ollama）
+
+### 剩余验证
+
+- Moonshot 云端真实 LLM 回归尚未在本次动作中重跑；如要作为发布门槛，需要在允许联网环境下执行。
+
+---
+
 ## [2026-04-16] 阶段 1 完成：恢复日常模式验收可信度
 
 **状态**：已完成。阶段 1 的目标是让日常模式验收真正跑到 Runtime/LLM/daemon 稳定性逻辑，而不是卡在 fixture、真实桌面感知或脆弱关键词断言上。

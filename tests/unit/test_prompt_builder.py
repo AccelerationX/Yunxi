@@ -81,6 +81,23 @@ def test_emotion_section_content():
     assert "表达思念" in prompt
 
 
+def test_reaction_guidance_uses_user_input_without_template_copy():
+    builder = YunxiPromptBuilder(PromptConfig(enable_reaction_guidance=True))
+    hl = HeartLake()
+    hl.current_emotion = "担心"
+    ctx = RuntimeContext(
+        heart_lake_state=hl,
+        user_input="我今天有点累，只想你陪我一下",
+    )
+
+    prompt = builder.build_system_prompt(ctx)
+
+    assert "当前反应参考" in prompt
+    assert "安慰与陪伴" in prompt
+    assert "不要照抄示例" in prompt
+    assert "不要输出反应库字段名" in prompt
+
+
 def test_factory_mode_section():
     builder = YunxiPromptBuilder(PromptConfig(enable_mode=True))
     ctx = RuntimeContext(mode="factory", factory_status="正在构建 yunxi-pet")

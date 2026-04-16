@@ -101,6 +101,29 @@ async def test_scenario_tester_exposes_heart_lake_reaction_to_jealous_input(tmp_
         await tester.close()
 
 
+@pytest.mark.asyncio
+async def test_scenario_tester_injects_reaction_guidance_for_user_input(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock"),
+        scripted_responses=["远，先停一下。我在这儿陪你，今天不用一个人硬撑。"],
+    )
+    try:
+        response = await tester.chat("我今天有点累，只想你陪我一下")
+
+        system_prompt = tester.last_system_prompt()
+        assert "当前反应参考" in system_prompt
+        assert "安慰与陪伴" in system_prompt
+        assert "成人化内容" not in system_prompt
+        tester.behavior_check(
+            response,
+            expected_any=("陪", "远", "我在"),
+            require_companion_tone=True,
+        ).assert_passed()
+    finally:
+        await tester.close()
+
+
 def test_behavior_check_rejects_internal_fields_and_toolish_plans(tmp_path):
     check = DailyModeScenarioTester.behavior_check(
         "initiative_event: 第一步执行工具调用，然后输出任务清单。",

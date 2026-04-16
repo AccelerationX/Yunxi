@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from core.persona.profile import YunxiPersonaProfile, load_persona_profile
+from core.persona.reaction_library import ReactionLibrary, load_reaction_library
 from domains.memory.relationship_profile import (
     UserRelationshipProfile,
     load_user_relationship_profile,
@@ -24,11 +25,14 @@ class PromptConfig:
     enable_continuity: bool = True
     enable_failure_hints: bool = True
     enable_emotion: bool = True
+    enable_reaction_guidance: bool = True
     enable_mode: bool = True
     enable_tools: bool = True
     max_memory_lines: int = 10
     max_perception_lines: int = 8
     max_failure_hints: int = 3
+    max_reaction_matches: int = 2
+    max_reaction_examples: int = 2
 
 
 @dataclass
@@ -43,6 +47,7 @@ class RuntimeContext:
     available_tools: List[str] = field(default_factory=list)
     factory_status: Optional[str] = None
     initiative_context: str = ""
+    user_input: str = ""
 
 
 class YunxiPromptBuilder:
@@ -53,10 +58,12 @@ class YunxiPromptBuilder:
         config: Optional[PromptConfig] = None,
         persona_profile: Optional[YunxiPersonaProfile] = None,
         relationship_profile: Optional[UserRelationshipProfile] = None,
+        reaction_library: Optional[ReactionLibrary] = None,
     ):
         self.config = config or PromptConfig()
         self.persona_profile = persona_profile or load_persona_profile()
         self.relationship_profile = relationship_profile or load_user_relationship_profile()
+        self.reaction_library = reaction_library or load_reaction_library()
 
     def build_system_prompt(self, context: RuntimeContext) -> str:
         """根据运行时上下文构建 system prompt。"""
@@ -70,6 +77,11 @@ class YunxiPromptBuilder:
 
         if self.config.enable_emotion:
             sections.append(self._build_emotion_section(context))
+
+        if self.config.enable_reaction_guidance:
+            sec = self._build_reaction_guidance_section(context)
+            if sec:
+                sections.append(sec)
 
         if self.config.enable_perception:
             sec = self._build_perception_section(context)
@@ -158,6 +170,34 @@ class YunxiPromptBuilder:
             f"你当前的主导情绪是：{dominant}\n"
             f"表达要求：{emotion_hint}\n"
         )
+
+    def _build_reaction_guidance_section(self, context: RuntimeContext) -> str:
+        if not context.user_input:
+            return ""
+
+        dominant = getattr(context.heart_lake_state, "current_emotion", "")
+        matches = self.reaction_library.match(
+            context.user_input,
+            current_emotion=dominant,
+            limit=self.config.max_reaction_matches,
+        )
+        if not matches:
+            return ""
+
+        lines = [
+            "【当前反应参考】",
+            "以下只用于把握说话姿态，不要照抄示例；回复仍要结合当前上下文自然生成。",
+        ]
+        for match in matches:
+            reaction = match.reaction
+            lines.append(f"- 场景：{reaction.name}")
+            lines.append(f"  风格：{reaction.style}")
+            examples = reaction.examples[: self.config.max_reaction_examples]
+            if examples:
+                lines.append("  表达温度参考：")
+                lines.extend([f"  - {example}" for example in examples])
+        lines.append("不要输出反应库字段名、触发词、匹配分数或任何内部判断。")
+        return "\n".join(lines)
 
     def _build_perception_section(self, context: RuntimeContext) -> str:
         p = context.perception_snapshot
