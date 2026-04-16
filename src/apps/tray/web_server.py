@@ -1,4 +1,7 @@
-"""Tray 状态面板数据适配。"""
+"""Tray/WebUI 状态控制面板数据适配。
+
+正式日常对话统一走飞书；这里只暴露状态、日志和本地控制面板所需数据。
+"""
 
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List
@@ -8,7 +11,7 @@ from core.runtime import YunxiRuntime
 
 @dataclass
 class RuntimeStatus:
-    """Runtime 暴露给 Tray/WebUI 的状态快照。"""
+    """Runtime 暴露给 Tray/WebUI 状态控制面板的状态快照。"""
 
     mode: str
     emotion: str
@@ -24,7 +27,7 @@ class RuntimeStatus:
 
 
 def build_runtime_status(runtime: YunxiRuntime) -> RuntimeStatus:
-    """从 Runtime 构建 Tray/WebUI 状态快照。"""
+    """从 Runtime 构建 Tray/WebUI 状态控制面板快照。"""
     context = runtime.get_context()
     heart_lake = context.heart_lake_state
     perception = context.perception_snapshot

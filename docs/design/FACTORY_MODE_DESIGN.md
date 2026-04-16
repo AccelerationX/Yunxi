@@ -46,13 +46,13 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        表现层（Interfaces）                      │
-│  ┌──────────────┐  ┌─────────────────────────────────────────┐  │
-│  │ 系统托盘右键  │  │ WebUI "云汐的房间" → 工厂终端         │  │
-│  │ 进入工厂模式  │  │  ├── 项目列表                           │  │
-│  └──────────────┘  │  ├── 实时进度面板（来自 Dashboard）     │  │
-│                    │  ├── Worker 状态监控                     │  │
-│                    │  ├── 阻塞告警与人工干预入口              │  │
-│                    │  └── [进入项目] 按钮                    │  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐ │
+│  │ yunxi CLI    │  │ 系统托盘右键  │  │ WebUI 状态控制面板  │ │
+│  │ 当前目录启动  │  │ 打开工厂终端  │  │  ├── 项目列表        │ │
+│  └──────────────┘  └──────────────┘  │  ├── 实时进度面板    │ │
+│                                      │  ├── Worker 状态监控 │ │
+│                                      │  ├── 阻塞告警        │ │
+│                                      │  └── [进入工厂模式]  │ │
 │                    └─────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -112,9 +112,51 @@
 
 ---
 
-## 三、核心组件设计（全部在 yunxi3.0/factory/ 内重写）
+## 三、进入方式与终端边界
 
-### 3.1 FactoryEngine（厂长核心）
+### 3.1 `yunxi` CLI
+
+工厂模式的主入口对齐 Codex CLI / Claude Code CLI 的使用方式：
+
+1. 用户在系统资源管理器中进入任意项目文件夹。
+2. 在该文件夹打开终端，或手动把终端路径切换到目标项目目录。
+3. 输入 `yunxi`。
+4. 云汐以当前工作目录作为 `project_dir`，进入工厂模式终端。
+
+也支持显式指定目录：
+
+```powershell
+yunxi --project-dir D:\Projects\my-app
+```
+
+当前已提供占位入口：
+
+- `src/apps/factory_cli/main.py`：工厂 CLI 模块。
+- `yunxi.cmd`：Windows 启动器。将 `D:\yunxi3.0` 或后续安装目录加入 PATH 后，可在任意项目目录直接输入 `yunxi`。
+
+在 Phase 6 工厂核心引擎实现前，CLI 只进入占位终端；Phase 6 后它将接入 `FactoryEngine`，进入需求澄清、方案确认、任务拆分、Worker 调度和验收回报流程。
+
+### 3.2 WebUI / Tray 边界
+
+WebUI 不承载正式聊天，也不内嵌工厂终端。它只负责：
+
+- 显示日常模式状态、运行日志、飞书连接状态和 healthcheck 结果。
+- 显示工厂项目列表、任务进度、Worker 状态、阻塞告警。
+- 提供“进入工厂模式”按钮，打开本地终端并执行 `yunxi`。
+
+系统托盘只负责本地控制：
+
+- 左键打开 WebUI 状态页。
+- 右键菜单提供进入工厂模式、执行 healthcheck、打开日志、停止/重启 daemon。
+- “进入工厂模式”同样是打开终端并执行 `yunxi`。
+
+日常聊天、主动消息和工具确认不经过 WebUI/Tray，统一走飞书。
+
+---
+
+## 四、核心组件设计（全部在 yunxi3.0/factory/ 内重写）
+
+### 4.1 FactoryEngine（厂长核心）
 
 ```python
 # factory/engine.py
@@ -248,7 +290,7 @@ class FactoryEngine:
         await self.dashboard.stop()
 ```
 
-### 3.2 DAGScheduler（DAG 调度器）
+### 4.2 DAGScheduler（DAG 调度器）
 
 ```python
 # factory/scheduler.py
@@ -363,7 +405,7 @@ class DAGScheduler:
         }
 ```
 
-### 3.3 WorkerRegistry（Worker 注册表）
+### 4.3 WorkerRegistry（Worker 注册表）
 
 ```python
 # factory/registry.py
@@ -412,7 +454,7 @@ class WorkerRegistry:
         return list(self._workers.values())
 ```
 
-### 3.4 ClaudeWorker（Claude Code CLI 子进程包装器）
+### 4.4 ClaudeWorker（Claude Code CLI 子进程包装器）
 
 ```python
 # factory/worker.py
@@ -513,7 +555,7 @@ class WorkerResult:
     stderr: str
 ```
 
-### 3.5 Workspace（项目工作区管理）
+### 4.5 Workspace（项目工作区管理）
 
 ```python
 # factory/workspace.py
@@ -634,7 +676,7 @@ class WorkerInspectionResult:
     failure_reason: Optional[str] = None
 ```
 
-### 3.6 MergeResolver（Merge 冲突处理）
+### 4.6 MergeResolver（Merge 冲突处理）
 
 ```python
 # factory/merge_resolver.py
@@ -674,7 +716,7 @@ class MergeResolver:
             return False
 ```
 
-### 3.7 FactoryDashboard（工厂监控面板）
+### 4.7 FactoryDashboard（工厂监控面板）
 
 ```python
 # factory/dashboard.py
@@ -752,7 +794,7 @@ refresh();
 
 ---
 
-## 四、ProjectTemplate（项目类型模板）
+## 五、ProjectTemplate（项目类型模板）
 
 ```python
 # factory/templates/base.py
@@ -780,7 +822,7 @@ class ProjectTemplate(ABC):
         pass
 ```
 
-### 4.1 PythonDesktopTemplate（桌宠项目模板）
+### 5.1 PythonDesktopTemplate（桌宠项目模板）
 
 ```python
 # factory/templates/python_desktop.py
@@ -925,7 +967,7 @@ class PythonDesktopTemplate(ProjectTemplate):
 
 ---
 
-## 五、厂长人格与汇报生成器
+## 六、厂长人格与汇报生成器
 
 ```python
 # factory/reporter.py
@@ -957,7 +999,7 @@ class ReportGenerator:
 
 ---
 
-## 六、异常恢复策略
+## 七、异常恢复策略
 
 | 异常场景 | 恢复策略 |
 |---------|---------|
@@ -972,7 +1014,7 @@ class ReportGenerator:
 
 ---
 
-## 七、实施路径
+## 八、实施路径
 
 ### Phase A：单 Worker 跑通（验证核心流程）
 1. 实现 `FactoryEngine` + `DAGScheduler` + `ClaudeWorker` + `Workspace`
@@ -997,7 +1039,7 @@ class ReportGenerator:
 
 ---
 
-## 八、验收标准
+## 九、验收标准
 
 1. `FactoryEngine.start_project()` 能成功初始化 git 仓库、生成 `task.json`、`CLAUDE.md`。
 2. `DAGScheduler` 能正确解析 6 个桌宠任务的依赖关系，按 DAG 顺序调度。

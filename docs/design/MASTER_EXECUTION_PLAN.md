@@ -9,7 +9,7 @@
 
 Anchor: YUNXI2_PERSONA_INITIATIVE_MIGRATION
 
-> **2026-04-15 状态更新**：P0-A/P0-B/P0-C/P0-D 已完成；P0-E 本地 Ollama 真实 Runtime 行为矩阵第一批已完成。Persona / relationship profile、Continuity 持久化与 open_threads、生活事件库迁移、三层主动事件系统、多维主动决策、expression context 和 proactive generation context 已经落地并接入 Runtime。Phase 5 仍不能视为完整完成，剩余阻塞项是云端模型对照、长时间 daemon 稳定性、真实发送通道和 Tray/WebUI。
+> **2026-04-16 状态更新**：阶段 0-4 已完成。Persona / relationship profile、Continuity 持久化与 open_threads、生活事件库迁移、三层主动事件系统、多维主动决策、expression context、proactive generation context、工具确认最小闭环、错误人格化、provider 重试和 MCP timeout 已落地。Phase 5 仍不能视为完整完成，剩余阻塞项是飞书 live 真实入口闭环、分层感知、deep healthcheck，以及 WebUI/Tray 状态控制面板。
 
 > 状态：重要 / 待实现 / P0 阻塞项。Phase 5 不能被视为完整完成，Phase 6 不应继续扩展，直到本项完成真实 LLM 验收。
 
@@ -91,10 +91,12 @@ Phase 4：情感系统修复与主动性重建（1.5 周）
 Phase 5：日常模式端到端闭环（1.5 周）
   ├─ core/runtime.py              → YunxiRuntime 统筹层
   ├─ apps/daemon/main.py          → 适配 MCP Hub + Runtime
-  ├─ apps/tray/                   → 状态面板数据适配
+  ├─ interfaces/feishu/           → 唯一日常对话入口，承载用户消息、主动消息、工具确认
+  ├─ apps/tray/                   → 状态控制面板数据适配，不承载正式聊天
   └─ 全链路 ConversationTester 回归测试
 
 Phase 6：工厂模式核心引擎（2 周）
+  ├─ apps/factory_cli/main.py      → `yunxi` CLI 入口接入 FactoryEngine
   ├─ factory/engine.py            → FactoryEngine
   ├─ factory/scheduler.py         → DAGScheduler
   ├─ factory/registry.py          → WorkerRegistry
@@ -248,25 +250,28 @@ Phase 9：工程收尾与文档固化（1 周）
 
 ### Phase 5：日常模式端到端闭环
 
-> **实现状态（2026-04-15）**：Phase 5 已启动。`YunxiRuntime` 已接入连续性记录；`apps/daemon/main.py` 已提供最小 daemon 入口和 healthcheck；`apps/tray/web_server.py` 已提供 Runtime 状态快照适配。30 分钟 daemon 稳定性与真实 Tray HTTP 服务仍待验收。
+> **实现状态（2026-04-16）**：Phase 5 已启动。`YunxiRuntime` 已接入连续性记录；`apps/daemon/main.py` 已提供最小 daemon 入口和 healthcheck；`apps/tray/web_server.py` 已提供 Runtime 状态快照适配。入口设计已调整为飞书唯一日常对话通道，WebUI/Tray 只做状态、日志、healthcheck 和工厂模式控制入口。
 
 **实现内容**：
 1. `core/runtime.py` — `YunxiRuntime`（统筹 Engine + PromptBuilder + HeartLake + Perception + Memory + Continuity）
 2. `apps/daemon/main.py` — 适配 MCP Hub + Runtime，删除旧的手动记忆调用
-3. `apps/tray/web_server.py` — 适配新的运行时状态字段
-4. 清理 `core/execution/` 中的 V1 兼容代码
+3. `interfaces/feishu/*` — 完成飞书 live 收消息、回消息、主动消息、工具确认闭环
+4. `apps/tray/web_server.py` — 适配状态控制面板字段，不做正式聊天入口
+5. 清理 `core/execution/` 中的 V1 兼容代码
 
 **测试顺序**：
 1. **Runtime 基线测试**：`yunxi_runtime.chat("你好")` 返回自然回复
 2. **记忆闭环测试**：对话后检查 `MemoryManager` 和 `ContinuityService` 已记录
 3. **感知-情感-记忆联动测试**：综合注入三者数据，验证回复同时体现三者
 4. **Daemon 启动测试**：`python apps/daemon/main.py` 能正常启动不崩溃
-5. **Tray 连接测试**：控制面板能正确显示 runtime 状态（ mood / perception / 工具列表 ）
-6. **全链路回归测试**：运行全部 `ConversationTester` 用例（目标：> 15 个用例全部通过）
+5. **飞书 live 入口测试**：能收用户消息、返回 Runtime 回复、发送主动消息、确认/取消 pending 工具
+6. **Tray/WebUI 控制面板测试**：控制面板能正确显示 runtime 状态、日志、飞书连接状态、pending confirmation 状态，并触发 healthcheck / 工厂入口
+7. **全链路回归测试**：运行全部 `ConversationTester` 用例（目标：> 15 个用例全部通过）
 
 **里程碑**：
 - [ ] Daemon 能独立启动并稳定运行 30 分钟
-- [ ] Tray 面板数据与 Runtime 状态一致
+- [ ] 飞书真实入口完成 chat + 主动消息 + 工具确认
+- [ ] Tray/WebUI 面板数据与 Runtime 状态一致
 - [ ] 全链路 ConversationTester 用例通过
 
 ---
@@ -274,20 +279,22 @@ Phase 9：工程收尾与文档固化（1 周）
 ### Phase 6：工厂模式核心引擎
 
 **实现内容**：
-1. `factory/engine.py` — `FactoryEngine`
-2. `factory/scheduler.py` — `DAGScheduler`
-3. `factory/registry.py` — `WorkerRegistry`
-4. `factory/worker.py` — `ClaudeWorker`
-5. `factory/workspace.py` — `Workspace`
-6. `factory/merge_resolver.py` — `MergeResolver`
-7. `factory/reporter.py` — `ReportGenerator`
+1. `apps/factory_cli/main.py` — 将 `yunxi` CLI 占位入口接入 FactoryEngine，默认用当前目录作为项目目录
+2. `factory/engine.py` — `FactoryEngine`
+3. `factory/scheduler.py` — `DAGScheduler`
+4. `factory/registry.py` — `WorkerRegistry`
+5. `factory/worker.py` — `ClaudeWorker`
+6. `factory/workspace.py` — `Workspace`
+7. `factory/merge_resolver.py` — `MergeResolver`
+8. `factory/reporter.py` — `ReportGenerator`
 
 **测试顺序**：
-1. **Workspace 初始化测试**：`workspace.initialize()` 生成 `task.json`、`CLAUDE.md`、`.git`
-2. **DAG 解析测试**：6 个桌宠任务的依赖关系被正确解析
-3. **Worker 启动测试**：`ClaudeWorker.start()` 成功创建 branch 并启动 `claude code` 进程
-4. **Worker 完成检测测试**：模拟 Worker commit 和 task.json 更新，`inspect_worker_result()` 判定成功
-5. **Merge 测试**：成功 branch 能 clean merge 到 `main`
+1. **CLI 入口测试**：在任意项目目录运行 `yunxi --status` 能识别当前目录；运行 `yunxi` 进入工厂终端
+2. **Workspace 初始化测试**：`workspace.initialize()` 生成 `task.json`、`CLAUDE.md`、`.git`
+3. **DAG 解析测试**：6 个桌宠任务的依赖关系被正确解析
+4. **Worker 启动测试**：`ClaudeWorker.start()` 成功创建 branch 并启动 `claude code` 进程
+5. **Worker 完成检测测试**：模拟 Worker commit 和 task.json 更新，`inspect_worker_result()` 判定成功
+6. **Merge 测试**：成功 branch 能 clean merge 到 `main`
 
 **里程碑**：
 - [ ] 单 Worker 完整 loop 跑通（从启动到 merge）
@@ -384,7 +391,7 @@ Phase 9：工程收尾与文档固化（1 周）
 | P0 | 情感表达测试（想念/吃醋/开心） | Phase 4 | 集成测试 |
 | P0 | 主动性走 LLM 路径 | Phase 4 | 集成测试 |
 | P0 | Daemon 稳定启动 | Phase 5 | 真实运行 |
-| P0 | Tray 面板状态一致 | Phase 5 | 真实运行 |
+| P0 | Tray/WebUI 状态控制面板一致 | Phase 5 | 真实运行 |
 | P0 | 日常模式全链路回归 | Phase 5 | 集成测试 |
 | P1 | 单 Worker loop 跑通 | Phase 6 | 真实执行 |
 | P1 | Dashboard 实时监控 | Phase 7 | 真实运行 |

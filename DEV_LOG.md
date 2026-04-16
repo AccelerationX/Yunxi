@@ -7,6 +7,38 @@
 
 ---
 
+## [2026-04-16] 设计调整：飞书作为唯一日常对话入口，WebUI/Tray 改为状态与控制面板
+
+**状态**：已采纳。阶段 5 的入口设计从“飞书、Tray、WebUI 都可能承载聊天”调整为“飞书承载日常对话，WebUI/Tray 只做本地状态、日志和控制入口”。
+
+### 关键决策
+
+- 日常模式的用户主动对话、云汐主动消息、工具确认，默认全部走飞书。
+- WebUI 不再作为正式聊天入口，不再承担主动消息承载；它只显示云汐状态、运行日志、healthcheck、飞书连接状态、pending 工具确认状态，以及工厂模式入口。
+- 系统托盘定位为 launcher/control surface：左键打开 WebUI，右键提供打开状态页、进入工厂模式、执行 healthcheck、打开日志、停止/重启 daemon 等操作。
+- 工厂模式对话默认走终端，不放进 WebUI 聊天框。
+- 新增 `yunxi` CLI 入口设计：用户在任意项目文件夹打开终端，输入 `yunxi` 后进入工厂模式终端；当前目录作为工厂项目目录。WebUI 按钮和托盘右键后续也统一打开该终端入口。
+
+### 已落地占位
+
+- 新增 `src/apps/factory_cli/main.py`：提供 `yunxi` 工厂模式 CLI 占位入口，支持 `--status` 和 `--project-dir`。
+- 新增 `yunxi.cmd`：Windows 命令启动器，后续可加入 PATH，使任意项目目录中输入 `yunxi` 都能进入工厂模式终端。
+- 新增 `tests/unit/test_factory_cli.py`：验证 CLI 状态输出和默认项目目录解析。
+
+### 已验证
+
+- `python -m py_compile src\apps\factory_cli\main.py src\apps\tray\web_server.py tests\unit\test_factory_cli.py` -> passed
+- `python -m pytest -q tests\unit\test_factory_cli.py tests\unit\test_prompt_builder.py` -> 12 passed
+- `.\yunxi.cmd --status` -> 输出 `mode=factory`、`entry=yunxi_cli`、`implementation_state=placeholder`，并正确识别当前项目目录。
+
+### 对阶段 5 的影响
+
+- P1-07 不再要求 WebUI/Tray 实现聊天、主动消息流和工具确认提交入口。
+- 阶段 5 的真实入口验收改为：飞书 live 完成收消息、Runtime 回复、主动消息发送、工具确认确认/取消闭环。
+- WebUI/Tray 阶段 5 验收改为：状态页、日志页、healthcheck 操作、飞书连接状态、pending confirmation 状态展示、工厂模式入口可用。
+
+---
+
 ## [2026-04-16] 阶段 4 完成：日常工具确认和错误人格化
 
 **状态**：已完成首版。阶段 4 目标是让 daily_mode 下工具请求不再直接变成安全错误，并避免把工程异常暴露给用户。
@@ -43,13 +75,13 @@
 
 ### 下一步
 
-进入阶段 5：真实日常入口、Tray/WebUI 和分层感知。
+进入阶段 5：飞书真实日常入口、Tray/WebUI 状态控制面板和分层感知。
 
 优先处理：
 1. Perception provider 分层，基础感知、慢速外部感知、可选隐私感知分别带 timeout 和降级。
-2. Tray/WebUI 接入 Runtime 状态和 pending confirmation。
+2. 飞书 live 接入 pending confirmation，完成日常聊天、主动消息和工具确认闭环。
 3. 常驻 daemon 增加深度 healthcheck。
-4. 飞书 live 或 Tray 至少一个真实入口完成 Layer 3 验收。
+4. Tray/WebUI 简化为状态、日志、healthcheck 和工厂模式控制入口。
 
 ---
 
@@ -290,19 +322,19 @@
 
 **日期**：2026-04-16  
 **阶段**：Phase 5 日常模式硬化中，尚不应进入 Phase 6 工厂模式。  
-**本次动作**：阶段 4 已完成，下一步进入真实日常入口、Tray/WebUI 和分层感知。
+**本次动作**：阶段 4 已完成，入口设计已调整为飞书唯一日常对话通道；下一步进入飞书 live、Tray/WebUI 状态控制面板和分层感知。
 
 ### 当前结论
 
 - Phase 0-5 的骨架已经基本搭好：Runtime、PromptBuilder、LLMAdapter、MCPHub、Memory、HeartLake、Initiative、Presence、daemon、飞书通道、Ollama/Moonshot 接入均已有实现。
 - yunxi2.0 的关键资产已经迁入一部分：人格 profile、用户关系 profile、生活事件库、三层主动事件系统、表达上下文、continuity/open_threads。
 - 日常模式仍不能标记为完成。阶段 1 已恢复本地 Ollama、Moonshot 和 daemon stability 的基础验收可信度；阶段 2 已修复 Runtime 单入口、飞书线程回调、飞书异步发送和 WebSocket 停止流程；阶段 3 已补齐主动预算跨日重置、关系记忆持久化、连续性自动沉淀和主动事件情绪影响；阶段 4 已完成工具确认最小闭环、错误人格化、provider 重试和 MCP timeout/结构化失败。
-- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真、Moonshot 旧矩阵和 Desktop MCP 集成均已通过；剩余阻塞集中在真实入口体验、Tray/WebUI、分层感知和深度 healthcheck。
+- 旧日志中“P0-E 全部完成”的表述已作废。当前真实 LLM 第一批仿真、Moonshot 旧矩阵和 Desktop MCP 集成均已通过；剩余阻塞集中在飞书真实入口闭环、Tray/WebUI 状态控制面板、分层感知和深度 healthcheck。
 
 ### 进入工厂模式前的硬门槛
 
 1. 日常模式真实 LLM 验收必须同时覆盖本地 Ollama 和云端 Moonshot，并实际跑通。
-2. 飞书或其他真实入口必须能稳定接收用户消息、调用 Runtime、返回回复、发送主动消息。
+2. 飞书作为唯一日常对话入口，必须能稳定接收用户消息、调用 Runtime、返回回复、发送主动消息，并完成工具确认。
 3. Presence 长期运行不能卡死，daemon 稳定性测试必须可信。
 4. 主动性预算、冷却、未回复克制必须按真实时间持久化，而不是进程内临时变量。
 5. 记忆系统必须能沉淀“远”和云汐之间的重要事实，而不只是当前进程内列表。
@@ -349,7 +381,7 @@
 
 - 已实现 `YunxiRuntime`、daemon、Presence tick、Tray 状态快照适配、飞书通道草案。
 - 已支持本地 Ollama 作为一等 LLM 后端。
-- 当前问题：Tray/WebUI 不是真实服务；print 模式不是可交互入口；飞书通道存在高风险线程/异步问题；Runtime 仍缺少并发保护。
+- 当前问题：飞书 live 还未完成完整真实入口验收；Tray/WebUI 仍只是状态快照适配，尚未成为状态与控制面板；分层感知和 deep healthcheck 仍待补齐。
 
 ---
 
@@ -500,7 +532,7 @@
 问题：
 - daily_mode 下 WRITE / EXECUTE 默认返回 `ask`。
 - `MCPHub` 对 `ask` 的处理只是返回错误。
-- 没有通过飞书、Tray、WebUI 或对话向用户发起确认。
+- 已有对话内 pending confirmation 最小闭环，但飞书 live 尚未完成确认/取消的真实入口验收。
 
 影响：
 - 云汐 prompt 里说“可以使用工具”，但实际调用会失败。
@@ -508,10 +540,10 @@
 
 修复要求：
 - 设计统一确认协议：pending tool request。
-- 飞书/Tray/WebUI 至少一个入口能完成确认。
+- 飞书真实入口必须能完成确认/取消；WebUI/Tray 只展示 pending 状态，不作为正式确认入口。
 - LLM 回复要自然表达“这个操作需要你点头”，不能暴露安全策略字段。
 
-当前状态：阶段 4 已完成最小闭环。`MCPHub` 会为 `ask` 生成 pending confirmation，`YunxiExecutionEngine` 支持“确认/取消”继续或放弃最新 pending 工具；回复采用自然表达，不暴露安全策略字段。飞书/Tray 的可视化确认入口留到阶段 5 接入。
+当前状态：阶段 4 已完成最小闭环。`MCPHub` 会为 `ask` 生成 pending confirmation，`YunxiExecutionEngine` 支持“确认/取消”继续或放弃最新 pending 工具；回复采用自然表达，不暴露安全策略字段。阶段 5 需要把确认/取消接入飞书 live；Tray/WebUI 只负责状态展示。
 
 ### P0-07：长期关系记忆还不是真正的长期记忆
 
@@ -698,20 +730,23 @@
 - 感知 provider 分层：快速基础感知、慢速外部感知、可选隐私感知。
 - 每类感知都要有超时和降级。
 
-### P1-07：Tray/WebUI 还不是日常入口
+### P1-07：Tray/WebUI 定位需改为状态与控制面板
 
 文件：`src/apps/tray/web_server.py`
 
 问题：
 - 当前只有 `RuntimeStatus` 和 `build_runtime_status()`。
-- 没有真实托盘图标、Web server、聊天入口、确认入口、主动消息展示。
+- 原设计把 WebUI/Tray 也当作聊天和主动消息入口，和飞书职责重叠。
+- 还没有真实托盘图标、Web server、日志查看、healthcheck 操作、飞书连接状态展示和工厂模式入口。
 
 影响：
-- 非飞书模式下 daemon 只能打印主动消息，不能完整互动。
+- 多个聊天入口会放大并发、消息去重、工具确认和状态同步复杂度。
+- WebUI/Tray 如果做重，会拖慢阶段 5 的核心目标：打穿飞书真实日常入口。
 
 修复方向：
-- 至少实现一个本地 WebUI 或系统托盘入口。
-- 支持 chat、主动消息流、工具确认、状态查看。
+- 飞书作为唯一日常对话入口：用户消息、云汐主动消息、工具确认全部走飞书。
+- WebUI 只做状态、日志、healthcheck、飞书连接状态、pending confirmation 状态展示和工厂模式入口。
+- Tray 左键打开 WebUI；右键提供打开状态页、进入工厂模式、执行 healthcheck、打开日志、停止/重启 daemon 等控制项。
 
 ### P1-08：LLM provider 缺少生产级重试和错误分层
 
@@ -1003,39 +1038,43 @@
 - 出错时不能暴露 `[工具执行遇到问题]` 或 `[云汐这里出了点小问题]` 这类工程模板。
 
 必须新增/修复测试：
-- 工具确认测试：写剪贴板/启动应用进入 pending confirmation，经飞书或本地入口确认后继续执行。
+- 工具确认测试：写剪贴板/启动应用进入 pending confirmation，经飞书真实入口确认后继续执行。
 - 错误人格化测试：LLM 异常、工具异常、安全 ask、未知工具都返回自然表达。
 - provider 重试测试：临时网络错误触发重试，最终失败时错误类型可区分。
 
 必须验证：
 - Layer 2/3/4 继续通过。
-- 工具确认链路至少有一个真实入口能闭合。
+- 工具确认链路通过飞书真实入口闭合。
 
 通过后可以进入：
-- 阶段 5 的 WebUI/Tray 和感知增强。
+- 阶段 5 的飞书 live 入口、WebUI/Tray 状态控制面板和感知增强。
 
-### 阶段 5：补真实日常入口、Tray/WebUI 和分层感知
+### 阶段 5：补飞书真实日常入口、Tray/WebUI 状态控制面板和分层感知
 
 先修问题：
 - P1-06：Perception provider 分层，基础感知、慢速外部感知、可选隐私感知分别带 timeout 和降级。
-- P1-07：实现真实本地 WebUI 或系统托盘入口，支持 chat、主动消息展示、工具确认、状态查看。
+- P1-07：飞书作为唯一日常对话入口，完成收消息、Runtime 回复、主动消息发送、工具确认确认/取消闭环。
+- P1-07：WebUI/Tray 简化为状态与控制面板，支持状态查看、运行日志、healthcheck、飞书连接状态、pending confirmation 状态展示和工厂模式入口。
 - P2-05：增加 `--healthcheck-deep`，覆盖 LLM ping、memory init/close、event library、continuity read/write、optional feishu config。
 - P2-04：把 `data/relationship/user_profile.md` 改成真实中文 Markdown，保留转义加载兼容。
 - P2-01 / P2-02：逐步用 dataclass / Protocol / TypedDict 替换核心裸 `Any` / `Dict`，并减少宽泛异常。
 
 原因：
-- 飞书不是唯一入口；本地入口缺失会导致 daemon 在非飞书模式下只能 print。
+- 日常聊天统一走飞书，避免 WebUI/Tray/飞书多个入口重复承载对话造成并发、去重和确认链路复杂化。
+- WebUI/Tray 的价值是本地可观测和控制，不是再造一套聊天产品。
 - 感知太薄会削弱“住在电脑里”的真实感，但感知增强必须先有超时、隐私和降级边界。
 
 必须新增/修复测试：
-- WebUI/Tray smoke test：能发 chat、显示主动消息、提交工具确认。
+- 飞书 live smoke test：能收用户消息、返回 Runtime 回复、发送主动消息、通过“确认/取消”处理 pending 工具。
+- WebUI/Tray smoke test：能显示状态、日志、飞书连接状态、pending confirmation 状态，并能触发 healthcheck / 工厂模式入口。
 - deep healthcheck 测试：能发现 LLM、memory、event library、continuity 和飞书配置问题。
 - 感知 timeout 测试：慢 provider 不阻塞整轮聊天。
 
 必须验证：
 - 日常模式全量仿真矩阵通过。
 - daemon 短跑/长跑稳定性通过。
-- 至少一个真实入口完成 chat + 主动消息 + 工具确认。
+- 飞书真实入口完成 chat + 主动消息 + 工具确认。
+- `yunxi` CLI 工厂模式入口占位可从任意项目目录解析当前路径。
 
 通过后可以进入：
 - 日常模式完成候选验收。
