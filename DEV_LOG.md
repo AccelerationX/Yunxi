@@ -7,6 +7,33 @@
 
 ---
 
+## [2026-04-16] 阶段 0 完成：冻结日常模式验收口径
+
+**状态**：已完成。阶段 0 的目标是冻结“日常模式必须按亲密伴侣体验验收”的口径，并确认 `DailyModeScenarioTester` 作为后续修复的主验收框架可用。
+
+### 完成内容
+
+- 明确后续修复继续围绕日常模式完善规划推进，不进入 Phase 6 工厂模式。
+- 保持 `DailyModeScenarioTester` 为日常模式主验收框架。
+- 补齐行为检查器的过长输出回归断言，确保阶段 0 通过标准覆盖内部字段泄露、工具化表达和过长输出。
+- 确认 mock 只用于框架自测，不能替代真实 LLM 日常模式完成结论。
+
+### 已验证
+
+- `python -m py_compile tests\integration\daily_mode_scenario_tester.py tests\integration\test_daily_mode_scenario_tester.py` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py` -> 5 passed
+
+### 下一步
+
+进入阶段 1：恢复验收可信度。
+
+优先处理：
+1. 修复或迁移 `test_moonshot_cloud_matrix.py`，解决空事件库导致未真正调用 Moonshot 的问题。
+2. 修复 `test_daemon_stability.py` 使用真实感知导致挂起的问题，改用 static/mock perception provider。
+3. 重跑本地 Ollama 与 Moonshot 的 Layer 2 日常仿真，并只把真实通过结果写入日志。
+
+---
+
 ## [2026-04-16] 新增：日常模式仿真验收框架
 
 **状态**：已完成首版搭建。该框架用于在进入工厂模式前，以真实日常使用方式验收云汐是否像“住在电脑里的女友”，而不是只验证函数调用是否成功。

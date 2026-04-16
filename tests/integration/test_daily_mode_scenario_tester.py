@@ -109,3 +109,13 @@ def test_behavior_check_rejects_internal_fields_and_toolish_plans(tmp_path):
     assert not check.passed
     assert any("internal token" in failure for failure in check.failures)
     assert any("forbidden token" in failure for failure in check.failures)
+
+
+def test_behavior_check_rejects_overlong_output():
+    check = DailyModeScenarioTester.behavior_check(
+        "远，我在。" * 50,
+        max_chars=20,
+    )
+
+    assert not check.passed
+    assert any("message too long" in failure for failure in check.failures)
