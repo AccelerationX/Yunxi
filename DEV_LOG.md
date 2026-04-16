@@ -7,6 +7,55 @@
 
 ---
 
+## [2026-04-16] 日常模式 v1 完成候选封板
+
+**状态**：日常模式 v1 完成候选已封板。后续不立即进入工厂模式，优先继续打磨日常模式的长期陪伴质量。
+
+### 封板依据
+
+- 飞书作为唯一正式日常聊天入口已完成真实 live 验证。
+- 飞书主动发送、入站消息、工具确认闭环均已通过。
+- Desktop、Filesystem/Document、Browser、GUI Agent 默认 MCP 工具体系已接入。
+- 全量默认 MCP 工具直接矩阵通过。
+- 飞书启用状态 deep healthcheck 通过。
+- 30 分钟 daemon 浸泡测试通过，结束后无 daemon/MCP 残留进程。
+- 阶段 6 后的工具生态扩展没有破坏既有 Desktop MCP、daemon stability、Phase 5 回归。
+
+### 新增封板文档与一键入口
+
+- 新增 `docs/daily_mode_v1.md`：记录 v1 能力、启动方式、验收结果、已知限制和后续优化方向。
+- 新增 `start_daily_mode.bat`：一键启动飞书日常模式。
+- 新增 `healthcheck_daily_mode.bat`：一键执行飞书启用状态 deep healthcheck。
+- 飞书 WebSocket 日志降噪：
+  - 对 `im.message.message_read_v1` 和 `im.chat.access_event.bot_p2p_chat_entered_v1` 注册空 handler，避免 lark SDK 输出 `processor not found`。
+  - WebSocket 正常 1000 close 识别为正常关闭，避免被云汐日志当作异常。
+
+### v1 后续方向
+
+短期不推进工厂模式实现。下一阶段继续围绕日常模式优化：
+
+- 长期记忆摘要和上下文压缩。
+- HeartLake 情绪语义评估、情绪惯性和恢复机制。
+- 主动性策略自然度。
+- Browser / GUI Agent 的真实任务能力。
+- 多日常驻稳定性和日志可观测性。
+
+### 后续审查输出
+
+- 新增 `docs/daily_mode_optimization_review.md`：整理日常模式继续打磨的 P0/P1/P2 优先级建议。
+- 审查中发现 `gui_type` 与此前 `browser_type` 有同类阻塞风险，已改成非阻塞 PowerShell `System.Windows.Forms.SendKeys` 路径。
+
+### 已验证
+
+- `python -m py_compile src\interfaces\feishu\websocket.py src\core\mcp\servers\gui_agent_server.py src\core\mcp\servers\browser_server.py src\apps\daemon\main.py` -> passed
+- `python -m pytest -q tests\unit\test_feishu_websocket.py tests\unit\test_daemon_healthcheck.py tests\unit\test_feishu_adapter.py tests\unit\test_execution_engine_stage4.py tests\unit\test_mcp_hub_stage4.py` -> 19 passed
+- `python -m pytest -q tests\integration\test_phase5_daily_mode.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 12 passed
+- `$env:YUNXI_PROVIDER='ollama'; $env:YUNXI_SKIP_LLM_PING='1'; cmd /c healthcheck_daily_mode.bat` -> passed
+- `$env:YUNXI_RUN_SECONDS='8'; $env:YUNXI_PROVIDER='ollama'; $env:YUNXI_TICK_INTERVAL='9999'; cmd /c start_daily_mode.bat` -> passed，正常关闭时不再输出 lark 1000 close error
+- `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py tests\integration\test_daily_mode_desktop_tools_direct.py -m desktop_mcp` -> 8 passed
+
+---
+
 ## [2026-04-16] 飞书日常模式 30 分钟浸泡测试通过
 
 **状态**：已完成阶段 6 后的首轮日常模式浸泡测试。飞书 live 主动发送、全量工具直接矩阵、飞书启用状态 deep healthcheck、30 分钟有界 daemon 稳定运行均通过。

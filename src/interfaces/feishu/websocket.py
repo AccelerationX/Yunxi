@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -96,9 +97,15 @@ class FeishuWebSocket:
         def event_handler(data: P2ImMessageReceiveV1) -> None:
             self._handle_message(data)
 
+        def ignored_event_handler(data: Any) -> None:
+            event_type = type(data).__name__
+            logger.debug("忽略飞书非文本事件: %s", event_type)
+
         return (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(event_handler)
+            .register_p2_im_message_message_read_v1(ignored_event_handler)
+            .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(ignored_event_handler)
             .build()
         )
 
@@ -120,7 +127,7 @@ class FeishuWebSocket:
                 self.app_id,
                 self.app_secret,
                 event_handler=event_handler,
-                log_level=lark.LogLevel.WARNING,
+                log_level=lark.LogLevel.CRITICAL,
             )
 
             def run_ws():
@@ -134,7 +141,10 @@ class FeishuWebSocket:
                     self._client.start()
                 except Exception as e:
                     if self._running:
-                        logger.exception(f"WebSocket 异常: {e}")
+                        if _is_normal_websocket_close(e):
+                            logger.info("飞书 WebSocket 正常关闭: %s", e)
+                        else:
+                            logger.exception(f"WebSocket 异常: {e}")
                     else:
                         logger.info("飞书 WebSocket 线程已退出: %s", e)
                 finally:
@@ -265,3 +275,8 @@ def start_feishu_websocket(
     )
     ws.start()
     return ws
+
+
+def _is_normal_websocket_close(exc: BaseException) -> bool:
+    text = str(exc)
+    return bool(re.search(r"sent 1000 .*received 1000|received 1000 .*sent 1000", text))

@@ -91,13 +91,9 @@ def gui_click(
 @mcp.tool()
 def gui_type(text: str) -> str:
     """Type text into the current focused UI field."""
-    try:
-        import pyautogui
-
-        pyautogui.write(text, interval=0.01)
+    if _send_keys_with_powershell(text):
         return "已向当前焦点输入文本"
-    except Exception as exc:
-        return f"[GUI 输入失败：{exc}]"
+    return "[GUI 输入失败：Windows SendKeys 启动失败]"
 
 
 @mcp.tool()
@@ -213,6 +209,40 @@ def _execute_macro_steps(steps: list[dict[str, Any]]) -> str:
         else:
             results.append(f"[跳过未知宏动作：{action}]")
     return "\n".join(results)
+
+
+def _send_keys_with_powershell(text: str) -> bool:
+    """Send text to the current focused control without blocking the MCP process."""
+    if not text:
+        return True
+    escaped = (
+        text.replace("'", "''")
+        .replace("{", "{{}")
+        .replace("}", "{}}")
+        .replace("+", "{+}")
+        .replace("^", "{^}")
+        .replace("%", "{%}")
+        .replace("~", "{~}")
+        .replace("(", "{(}")
+        .replace(")", "{)}")
+        .replace("[", "{[}")
+        .replace("]", "{]}")
+    )
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        f"[System.Windows.Forms.SendKeys]::SendWait('{escaped}')"
+    )
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        return True
+    except OSError:
+        return False
 
 
 if __name__ == "__main__":
