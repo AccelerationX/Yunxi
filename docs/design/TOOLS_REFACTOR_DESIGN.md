@@ -349,10 +349,49 @@ class AuditLogger:
 
 | Server | 工具 | 权限级别 | 说明 |
 |--------|------|---------|------|
-| `yunxi_mcp_bash` | `bash_execute` | READ + EXECUTE | 执行 bash 命令 |
-| `yunxi_mcp_filesystem` | `file_read`, `file_write`, `file_edit`, `glob`, `grep` | READ + WRITE | 文件操作 |
-| `yunxi_mcp_desktop` | `desktop_notify`, `screenshot_capture`, `clipboard_read`, `clipboard_write`, `app_launch_ui`, `window_focus_ui`, `media_control_ui` | READ + WRITE + EXECUTE | 桌面操作（基于 UIA） |
-| `yunxi_mcp_browser` | `browser_open`, `browser_search`, `web_page_read` | READ + NETWORK | 网页浏览（工厂模式下由 BrowserAgent 内部调用） |
+| `yunxi_mcp_filesystem` | `file_read`, `file_write`, `file_append`, `file_copy`, `file_move`, `list_dir`, `glob`, `grep`, `document_read` | READ + WRITE | 文件、目录和常见文档读取/整理。日常模式默认限制在允许根目录内，写入/移动/复制需要确认。 |
+| `yunxi_mcp_desktop` | `desktop_notify`, `screenshot_capture`, `clipboard_read`, `clipboard_write`, `app_launch_ui`, `window_focus_ui`, `window_minimize_ui`, `media_control_ui` | READ + WRITE + EXECUTE | 桌面操作（基于 UIA）。 |
+| `yunxi_mcp_browser` | `browser_open`, `browser_search`, `web_page_read`, `browser_extract_links`, `browser_click`, `browser_type` | READ + NETWORK + EXECUTE | 浏览器打开、搜索、网页读取、链接提取和基础页面操作。稳定路径优先使用 URL/HTML 解析；复杂网页自动化后续接 Playwright。 |
+| `yunxi_mcp_gui_agent` | `gui_observe`, `gui_click`, `gui_type`, `gui_hotkey`, `gui_run_task`, `gui_save_macro`, `gui_list_macros`, `gui_run_macro` | READ + WRITE + EXECUTE | 参考 `13_computer_use_agent` 重写的 GUI Agent 能力：观察、规划、原子操作、验证、宏记忆。作为浏览器/文件工具无法覆盖时的 fallback。 |
+| `yunxi_mcp_bash` | `bash_execute` | READ + EXECUTE | 工厂模式优先。日常模式默认不启用或强制确认，避免把云汐变成裸 shell 代理。 |
+
+### 4.1.1 阶段 6：住在电脑里的完整电脑能力
+
+阶段 6 的目标不是简单堆工具，而是让云汐拥有“能看见电脑、理解文件、操作浏览器、处理文档、必要时接管 GUI”的完整能力，同时保留女友日常模式的安全边界和人格表达。
+
+必须补齐的能力：
+
+1. **浏览器能力**
+   - 打开 URL、打开搜索结果页、读取网页正文、提取链接。
+   - 对简单网页支持点击和输入；对复杂网页后续接入 Playwright，避免靠坐标盲操作。
+   - 典型场景：查资料、打开你给的链接、阅读网页后总结、填写简单表单。
+
+2. **文件与文件夹能力**
+   - 列目录、读文件、写文件、追加、复制、移动、glob、grep。
+   - 日常模式默认启用允许根目录；跨根目录、覆盖、移动、写入必须走确认。
+   - 典型场景：帮你找文件、整理资料、把聊天中确定的内容写入 Markdown。
+
+3. **文档处理能力**
+   - Markdown、txt、json、csv、py 等纯文本文件直接读写。
+   - docx 使用标准 zip/xml 解析正文；xlsx 使用 zip/xml 读取工作表文本；pdf 在可用时使用本地 PDF 解析库，否则返回明确降级。
+   - 典型场景：读取需求文档、总结论文/报告、整理表格内容、生成草稿。
+
+4. **GUI Agent 能力**
+   - UIA 控件树观察、窗口内控件枚举、按控件名点击、当前焦点输入、热键。
+   - 每一步执行后保留验证入口；成功流程可保存为 GUI Macro。
+   - 典型场景：操作没有 API 的 Windows 软件、跨应用流程、需要看屏幕后再执行的任务。
+
+5. **工具技能学习**
+   - MCP 审计日志和 GUI Macro 进入 SkillLibrary。
+   - 重复成功的工具链沉淀为可复用技能；失败案例进入 FailureReplay，提醒云汐避坑。
+
+6. **安全与确认**
+   - READ 默认允许。
+   - WRITE / EXECUTE 默认 pending confirmation。
+   - NETWORK 默认允许读取，但涉及登录、提交、下载、上传、支付、删除、覆盖时必须确认。
+   - GUI Agent 的 `gui_click`、`gui_type`、`gui_hotkey`、`gui_run_task` 默认需要确认。
+
+阶段 6 完成后，才进入飞书日常模式浸泡测试。浸泡测试必须覆盖：飞书聊天、主动消息、工具确认、浏览器读取、文件/文档读写、GUI fallback、重启后记忆连续性。
 
 ### 4.2 关键 Server 示例：`yunxi_mcp_desktop`
 
@@ -802,5 +841,5 @@ class YunxiExecutionEngine:
 ---
 
 *文档创建时间：2026-04-14*  
-*最后更新时间：2026-04-14*  
-*版本：v2.0*
+*最后更新时间：2026-04-16*
+*版本：v2.1*

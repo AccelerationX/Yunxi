@@ -110,8 +110,12 @@ async def build_runtime(config: DaemonConfig) -> YunxiRuntime:
     security = SecurityManager()
     audit = AuditLogger(memory_manager=memory)
     mcp_hub = MCPHub(client=client, planner=planner, security=security, audit=audit)
-    if config.enable_tool_use and config.initialize_desktop_mcp:
-        await mcp_hub.initialize([build_desktop_server_config()])
+    if config.enable_tool_use:
+        await mcp_hub.initialize(
+            build_default_tool_server_configs(
+                include_desktop=config.initialize_desktop_mcp,
+            )
+        )
 
     engine = YunxiExecutionEngine(
         llm=llm,
@@ -157,6 +161,99 @@ def build_desktop_server_config() -> dict[str, object]:
             "app_launch_ui": [PermissionLevel.EXECUTE.value],
             "window_focus_ui": [PermissionLevel.EXECUTE.value],
             "window_minimize_ui": [PermissionLevel.EXECUTE.value],
+        },
+    }
+
+
+def build_default_tool_server_configs(include_desktop: bool = True) -> list[dict[str, object]]:
+    """构建日常模式默认 MCP Server 配置。"""
+    configs = [
+        build_filesystem_server_config(),
+        build_browser_server_config(),
+        build_gui_agent_server_config(),
+    ]
+    if include_desktop:
+        configs.insert(0, build_desktop_server_config())
+    return configs
+
+
+def _build_server_env(extra: Optional[dict[str, str]] = None) -> dict[str, str]:
+    project_root = Path(__file__).resolve().parents[3]
+    env = os.environ.copy()
+    src_path = str(project_root / "src")
+    env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
+    if "YUNXI_ALLOWED_FILE_ROOTS" not in env:
+        roots = [str(project_root), str(Path.home())]
+        d_drive = Path("D:/")
+        if d_drive.exists():
+            roots.append(str(d_drive))
+        env["YUNXI_ALLOWED_FILE_ROOTS"] = os.pathsep.join(roots)
+    if extra:
+        env.update(extra)
+    return env
+
+
+def build_filesystem_server_config() -> dict[str, object]:
+    """构建 Filesystem/Document MCP Server 配置。"""
+    project_root = Path(__file__).resolve().parents[3]
+    server_path = project_root / "src" / "core" / "mcp" / "servers" / "filesystem_server.py"
+    return {
+        "name": "filesystem",
+        "command": sys.executable,
+        "args": ["-u", str(server_path)],
+        "env": _build_server_env(),
+        "permissions": {
+            "list_dir": [PermissionLevel.READ.value],
+            "file_read": [PermissionLevel.READ.value],
+            "document_read": [PermissionLevel.READ.value],
+            "glob": [PermissionLevel.READ.value],
+            "grep": [PermissionLevel.READ.value],
+            "file_write": [PermissionLevel.WRITE.value],
+            "file_append": [PermissionLevel.WRITE.value],
+            "file_copy": [PermissionLevel.WRITE.value],
+            "file_move": [PermissionLevel.WRITE.value],
+        },
+    }
+
+
+def build_browser_server_config() -> dict[str, object]:
+    """构建 Browser MCP Server 配置。"""
+    project_root = Path(__file__).resolve().parents[3]
+    server_path = project_root / "src" / "core" / "mcp" / "servers" / "browser_server.py"
+    return {
+        "name": "browser",
+        "command": sys.executable,
+        "args": ["-u", str(server_path)],
+        "env": _build_server_env(),
+        "permissions": {
+            "browser_open": [PermissionLevel.NETWORK.value, PermissionLevel.EXECUTE.value],
+            "browser_search": [PermissionLevel.NETWORK.value],
+            "web_page_read": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+            "browser_extract_links": [PermissionLevel.READ.value, PermissionLevel.NETWORK.value],
+            "browser_click": [PermissionLevel.NETWORK.value, PermissionLevel.EXECUTE.value],
+            "browser_type": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
+        },
+    }
+
+
+def build_gui_agent_server_config() -> dict[str, object]:
+    """构建 GUI Agent MCP Server 配置。"""
+    project_root = Path(__file__).resolve().parents[3]
+    server_path = project_root / "src" / "core" / "mcp" / "servers" / "gui_agent_server.py"
+    return {
+        "name": "gui_agent",
+        "command": sys.executable,
+        "args": ["-u", str(server_path)],
+        "env": _build_server_env(),
+        "permissions": {
+            "gui_observe": [PermissionLevel.READ.value],
+            "gui_list_macros": [PermissionLevel.READ.value],
+            "gui_save_macro": [PermissionLevel.WRITE.value],
+            "gui_run_macro": [PermissionLevel.EXECUTE.value],
+            "gui_click": [PermissionLevel.EXECUTE.value],
+            "gui_type": [PermissionLevel.WRITE.value, PermissionLevel.EXECUTE.value],
+            "gui_hotkey": [PermissionLevel.EXECUTE.value],
+            "gui_run_task": [PermissionLevel.EXECUTE.value],
         },
     }
 

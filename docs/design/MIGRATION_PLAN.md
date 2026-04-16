@@ -149,15 +149,31 @@ Phase 3：日常模式血肉
   ├─ INITIATIVE_REPAIR_DESIGN.md  → 主动性修复
   └─ HEART_LAKE_L4_DESIGN.md      → 情感特化（固定 L4）
 
-Phase 4：工具层完整落地
+Phase 4：工具层确认闭环
   ├─ TOOLS_REFACTOR_DESIGN.md     → MCP Server 实现、DAGPlanner、视觉断言、GUI Macro
-  └─ 所有工具通过 ConversationTester 验收
+  └─ Desktop MCP 基础工具、pending confirmation 和错误人格化验收
 
-Phase 5：工厂模式
+Phase 5：日常入口与状态控制
+  ├─ 飞书作为唯一日常对话入口
+  ├─ WebUI/Tray 改为状态、日志、healthcheck 和工厂入口
+  └─ 分层感知与 deep healthcheck
+
+Phase 6：电脑能力工具生态扩展
+  ├─ Browser MCP             → 浏览器打开、搜索、网页读取、链接提取、基础网页操作
+  ├─ Filesystem/Document MCP → 文件读写、目录整理、grep/glob、docx/xlsx/pdf 降级读取
+  ├─ GUI Agent MCP           → UIA 观察、点击、输入、热键、GUI Macro
+  └─ 跳过飞书的直接工具矩阵验收
+
+Phase 7：飞书日常模式浸泡测试
+  ├─ 飞书聊天 + 主动消息 + 工具确认
+  ├─ 浏览器 / 文档 / GUI fallback 抽样真实触发
+  └─ 重启后记忆连续性检查
+
+Phase 8：工厂模式
   ├─ FACTORY_MODE_DESIGN.md       → 基于 MACP 核心逻辑重写（参考 03 重写）
   └─ 以桌宠项目为验证任务
 
-Phase 6：终身学习闭环
+Phase 9：终身学习闭环
   └─ domains/memory/skills/       → PatternMiner + SkillDistiller + FailureReplay（参考 15 重写）
 ```
 
@@ -209,5 +225,5 @@ Phase 6：终身学习闭环
 ---
 
 *文档创建时间：2026-04-14*  
-*最后更新时间：2026-04-14*  
-*版本：v2.0*
+*最后更新时间：2026-04-16*
+*版本：v2.1*

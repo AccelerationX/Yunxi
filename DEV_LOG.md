@@ -7,6 +7,84 @@
 
 ---
 
+## [2026-04-16] 阶段 6 规划：电脑能力工具生态扩展，飞书浸泡测试后移
+
+**状态**：首版已落地并通过直接工具矩阵。此前飞书入口、Desktop MCP 基础工具和确认闭环已通过，但工具生态仍不足以支撑“住在电脑里的云汐”完整电脑能力，因此飞书日常模式浸泡测试后移到阶段 6 完成之后。
+
+### 目标调整
+
+- 不再把“飞书聊天 + 剪贴板/截图/通知/窗口控制”视为日常模式最终完成门槛。
+- 阶段 6 先补齐 Browser MCP、Filesystem/Document MCP、GUI Agent MCP。
+- 新增工具仍遵守日常模式安全边界：READ 默认允许，WRITE/EXECUTE 默认需要飞书或直接测试中的“确认”。
+- 测试顺序继续沿用上一轮工具验收方式：先跳过飞书，直接模拟用户消息和“确认”，确认新增工具真实可运行；之后再进入飞书浸泡测试。
+
+### 阶段 6 必须覆盖的能力
+
+- 浏览器：打开 URL/搜索页、读取网页文本、提取链接、基础点击/输入。
+- 文件与文件夹：列目录、读写追加、复制、移动、glob、grep。
+- 文档：Markdown/txt/json/csv 直接读取，docx/xlsx 使用标准库解析正文，pdf 在本地解析库可用时读取，否则明确降级。
+- GUI Agent：UIA 观察、控件点击、焦点输入、热键、GUI 任务入口、GUI Macro 保存/列出/执行。
+- 技能沉淀入口：新增工具调用继续进入 MCP audit，为后续 SkillLibrary 和 FailureReplay 提供数据。
+
+### 已落地
+
+- 新增 `src/core/mcp/servers/browser_server.py`：
+  - `browser_open`
+  - `browser_search`
+  - `web_page_read`
+  - `browser_extract_links`
+  - `browser_click`
+  - `browser_type`
+- 新增 `src/core/mcp/servers/filesystem_server.py`：
+  - `list_dir`
+  - `file_read`
+  - `file_write`
+  - `file_append`
+  - `file_copy`
+  - `file_move`
+  - `glob`
+  - `grep`
+  - `document_read`
+- 新增 `src/core/mcp/servers/gui_agent_server.py`：
+  - `gui_observe`
+  - `gui_click`
+  - `gui_type`
+  - `gui_hotkey`
+  - `gui_run_task`
+  - `gui_save_macro`
+  - `gui_list_macros`
+  - `gui_run_macro`
+- daemon 默认工具配置扩展为 Desktop + Filesystem/Document + Browser + GUI Agent。`--skip-desktop-mcp` 只跳过 Desktop，仍会加载其他日常工具。
+- `DAGPlanner` 增加 Browser、Filesystem/Document、GUI Agent 的隐式依赖规则。
+- 新增 `tests/integration/test_daily_mode_extended_tools_direct.py`，沿用“用户请求 -> pending confirmation -> 用户确认 -> 工具执行”的直接验收方式。
+- 验证时发现 `browser_type` 通过 `pyautogui.write()` 在 MCP 子进程中可能阻塞到 client timeout，已改为非阻塞 PowerShell `System.Windows.Forms.SendKeys` fallback。
+
+### 已验证
+
+- `python -m py_compile src\core\mcp\servers\browser_server.py src\core\mcp\servers\filesystem_server.py src\core\mcp\servers\gui_agent_server.py src\apps\daemon\main.py src\core\mcp\planner.py tests\integration\test_daily_mode_extended_tools_direct.py` -> passed
+- 普通沙箱运行新增 MCP 矩阵因 Windows named pipe 权限失败，外部权限重跑：
+  - `python -m pytest -q tests\integration\test_daily_mode_extended_tools_direct.py -m desktop_mcp` -> 4 passed
+  - 覆盖 `list_dir/file_read/file_write/file_append/file_copy/file_move/glob/grep/document_read/browser_open/browser_search/web_page_read/browser_extract_links/browser_click/browser_type/gui_observe/gui_type/gui_hotkey/gui_run_task/gui_save_macro/gui_list_macros/gui_run_macro`。
+- 既有 Desktop MCP 直接矩阵外部权限重跑：
+  - `python -m pytest -q tests\integration\test_daily_mode_desktop_tools_direct.py -m desktop_mcp` -> 4 passed
+- Engine / MCPHub / daemon healthcheck 单元回归：
+  - `python -m pytest -q tests\unit\test_daemon_healthcheck.py tests\unit\test_execution_engine_stage4.py tests\unit\test_mcp_hub_stage4.py` -> 9 passed
+- Phase 5 / daemon stability 非真实 LLM 回归：
+  - `python -m pytest -q tests\integration\test_phase5_daily_mode.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 12 passed
+- daemon deep healthcheck 加载新增默认工具（跳过 Desktop，跳过 LLM ping）：
+  - `$env:PYTHONPATH='src'; python src\apps\daemon\main.py --provider ollama --skip-desktop-mcp --healthcheck-deep --skip-llm-ping --embedding-provider lexical` -> passed
+  - `available_tools` 包含 `list_dir/file_read/file_write/document_read/browser_search/web_page_read/browser_extract_links/gui_save_macro/gui_run_macro` 等新增工具。
+
+### 新验收门槛
+
+1. Browser/Filesystem/Document/GUI Agent MCP Server 能被 daemon 默认工具配置发现。
+2. 新增工具加入直接工具矩阵，跳过飞书模拟“用户请求 -> 云汐要求确认 -> 用户确认 -> 工具执行”。
+3. 文件写入、移动、GUI 操作等 WRITE/EXECUTE 工具必须进入 pending confirmation。
+4. 浏览器和文档读取可在无外网条件下用本地 HTML/文档样本完成验收。
+5. 阶段 6 通过后，再执行 30-60 分钟飞书日常模式浸泡测试，覆盖聊天、主动消息、工具确认、浏览器读取、文档读写、GUI fallback 和重启记忆连续性。
+
+---
+
 ## [2026-04-16] 设计调整：飞书作为唯一日常对话入口，WebUI/Tray 改为状态与控制面板
 
 **状态**：已采纳。阶段 5 的入口设计从“飞书、Tray、WebUI 都可能承载聊天”调整为“飞书承载日常对话，WebUI/Tray 只做本地状态、日志和控制入口”。
