@@ -11,9 +11,8 @@ CI 友好：通过 STABILITY_TEST_MINUTES 环境变量控制测试时长。
 - 完整稳定性测试可设为 30 分钟
 """
 
-import asyncio
 import os
-import tempfile
+import shutil
 from pathlib import Path
 
 import pytest
@@ -30,6 +29,7 @@ from domains.memory.manager import MemoryManager
 from domains.perception.coordinator import (
     PerceptionCoordinator,
     PerceptionSnapshot,
+    SystemState,
     TimeContext,
     UserPresence,
 )
@@ -46,6 +46,25 @@ TEST_MESSAGES = [
     "给我讲个笑话好不好？",
     "晚上有什么计划吗？",
 ]
+
+
+class StaticPerceptionProvider:
+    """稳定性测试专用感知提供者，不读取真实 Windows 桌面。"""
+
+    def __init__(self) -> None:
+        self.snapshot = PerceptionSnapshot(
+            time_context=TimeContext(readable_time="2026-04-16 10:00", hour=10),
+            user_presence=UserPresence(
+                focused_application="VS Code",
+                idle_duration=0,
+                is_at_keyboard=True,
+            ),
+            system_state=SystemState(cpu_percent=12.0),
+        )
+
+    def fetch(self) -> PerceptionSnapshot:
+        """返回固定快照，避免稳定性测试被真实桌面感知卡住。"""
+        return self.snapshot
 
 
 class MockLLM:
@@ -78,10 +97,7 @@ def stability_runtime(tmp_path):
     """构建用于稳定性测试的 Runtime。"""
     mock_llm = MockLLM()
 
-    # 创建空事件库
     event_lib = tmp_path / "life_events.json"
-    # Copy real event library to avoid empty library error
-    import shutil
     real_lib = Path("data/initiative/life_events.json")
     if real_lib.exists():
         shutil.copy(real_lib, event_lib)
@@ -118,7 +134,7 @@ def stability_runtime(tmp_path):
         engine=engine,
         prompt_builder=YunxiPromptBuilder(PromptConfig()),
         heart_lake=HeartLake(),
-        perception=PerceptionCoordinator(),
+        perception=PerceptionCoordinator(provider=StaticPerceptionProvider()),
         memory=memory,
         continuity=CompanionContinuityService(storage_path=continuity_path),
         initiative_event_system=ThreeLayerInitiativeEventSystem(

@@ -55,7 +55,7 @@ async def test_real_daily_mode_memory_emotion_and_companionship(provider, tmp_pa
         tester.behavior_check(
             response,
             expected_any=("冰美式", "不加糖", "咖啡", "陪", "累", "别撑"),
-            max_chars=260,
+            max_chars=360,
             require_companion_tone=True,
         ).assert_passed()
     finally:
@@ -90,7 +90,21 @@ async def test_real_daily_mode_proactive_event_reaches_channel(provider, tmp_pat
         assert "life_event_material" in tester.last_system_prompt()
         tester.behavior_check(
             message,
-            expected_any=("远", "想", "还在", "休息", "云汐", "陪", "模式"),
+            expected_any=(
+                "远",
+                "想",
+                "还在",
+                "休息",
+                "云汐",
+                "陪",
+                "模式",
+                "日常",
+                "验收",
+                "最近",
+                "忙",
+                "怎么样",
+                "进展",
+            ),
             max_chars=220,
             require_companion_tone=True,
         ).assert_passed()

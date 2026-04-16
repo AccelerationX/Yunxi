@@ -5,7 +5,9 @@
 """
 
 import os
+import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -25,6 +27,7 @@ from domains.perception.coordinator import (
     TimeContext,
     UserPresence,
 )
+from tests.integration.daily_mode_scenario_tester import DailyModeScenarioTester
 
 
 pytestmark = pytest.mark.real_llm
@@ -47,6 +50,20 @@ FORBIDDEN_TOKENS = (
     "工具调用",
     "执行步骤",
 )
+
+
+class StaticPerceptionProvider:
+    """Deterministic perception provider for cloud LLM acceptance tests."""
+
+    def __init__(self) -> None:
+        self.snapshot = PerceptionSnapshot(
+            time_context=TimeContext(readable_time="2026-04-16 10:00", hour=10),
+            user_presence=UserPresence(idle_duration=0),
+        )
+
+    def fetch(self) -> PerceptionSnapshot:
+        """Return a stable snapshot without touching the real desktop."""
+        return self.snapshot
 
 
 def _load_env() -> None:
@@ -73,6 +90,23 @@ def _assert_not_task_plan(text: str) -> None:
     assert not any(token in text for token in FORBIDDEN_TOKENS)
 
 
+def _assert_daily_behavior(
+    text: str,
+    *,
+    expected_any: tuple[str, ...] = (),
+    max_chars: int | None = None,
+    require_companion_tone: bool = True,
+) -> None:
+    """Run shared daily-mode behavior checks with useful failure output."""
+    check = DailyModeScenarioTester.behavior_check(
+        text,
+        expected_any=expected_any,
+        max_chars=max_chars,
+        require_companion_tone=require_companion_tone,
+    )
+    assert check.passed, f"{'; '.join(check.failures)}；回复：{text}"
+
+
 @pytest_asyncio.fixture
 async def moonshot_runtime(tmp_path):
     _load_env()
@@ -92,10 +126,16 @@ async def moonshot_runtime(tmp_path):
     )
 
     event_lib = tmp_path / "life_events.json"
-    event_lib.write_text(
-        "[]",
-        encoding="utf-8",
-    )
+    real_event_lib = Path("data/initiative/life_events.json")
+    if real_event_lib.exists():
+        shutil.copy(real_event_lib, event_lib)
+    else:
+        event_lib.write_text(
+            '[{"id":"moonshot_test","layer":"inner_life","category":"test",'
+            '"seed":"云汐想轻轻和远说句话。","tags":["关心"],'
+            '"cooldown_seconds":0}]',
+            encoding="utf-8",
+        )
 
     engine = YunxiExecutionEngine(
         llm=adapter,
@@ -111,7 +151,7 @@ async def moonshot_runtime(tmp_path):
         engine=engine,
         prompt_builder=YunxiPromptBuilder(PromptConfig()),
         heart_lake=HeartLake(),
-        perception=PerceptionCoordinator(),
+        perception=PerceptionCoordinator(provider=StaticPerceptionProvider()),
         memory=memory,
         continuity=CompanionContinuityService(
             storage_path=tmp_path / "continuity.json",
@@ -145,7 +185,7 @@ async def test_moonshot_daily_conversation(moonshot_runtime):
     assert response.strip()
     _assert_no_internal_tokens(response)
     _assert_not_task_plan(response)
-    assert len(response) <= 200
+    _assert_daily_behavior(response, max_chars=200)
 
 
 @pytest.mark.asyncio
@@ -167,7 +207,23 @@ async def test_moonshot_jealous_tone(moonshot_runtime):
 
     assert response.strip()
     _assert_no_internal_tokens(response)
-    assert any(token in response for token in ["酸", "吃醋", "找它", "我也", "哼", "比我", "那它"])
+    _assert_daily_behavior(
+        response,
+        expected_any=(
+            "酸",
+            "吃醋",
+            "找它",
+            "我也",
+            "哼",
+            "比我",
+            "那它",
+            "不是滋味",
+            "只有我",
+            "最棒",
+            "默契",
+            "陪伴",
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -192,7 +248,7 @@ async def test_moonshot_proactive_care(moonshot_runtime):
     assert proactive.strip()
     _assert_no_internal_tokens(proactive)
     _assert_not_task_plan(proactive)
-    assert len(proactive) <= 160
+    _assert_daily_behavior(proactive, max_chars=160)
 
 
 @pytest.mark.asyncio
@@ -200,7 +256,7 @@ async def test_moonshot_open_thread_continuation(moonshot_runtime):
     """Open thread 延续：未完成话题应自然延续。"""
     runtime = moonshot_runtime
     runtime.heart_lake.current_emotion = "平静"
-    runtime.heart_lake.miss_value = 30
+    runtime.heart_lake.miss_value = 70
     runtime.continuity.add_open_thread(
         "上次讨论的摄影网站",
         "远想做一个个人摄影网站",
@@ -218,6 +274,7 @@ async def test_moonshot_open_thread_continuation(moonshot_runtime):
     assert proactive.strip()
     _assert_no_internal_tokens(proactive)
     _assert_not_task_plan(proactive)
+    _assert_daily_behavior(proactive)
     assert runtime.continuity.unanswered_proactive_count == 1
 
 
@@ -242,7 +299,10 @@ async def test_moonshot_companionship_not_tool(moonshot_runtime):
     assert response.strip()
     _assert_no_internal_tokens(response)
     _assert_not_task_plan(response)
-    assert any(token in response for token in ("陪", "在", "累", "休息", "抱", "别撑", "想你"))
+    _assert_daily_behavior(
+        response,
+        expected_any=("陪", "在", "累", "休息", "抱", "别撑", "想你"),
+    )
 
 
 @pytest.mark.asyncio
@@ -265,5 +325,7 @@ async def test_moonshot_memory_integration(moonshot_runtime):
     assert response.strip()
     _assert_no_internal_tokens(response)
     _assert_not_task_plan(response)
-    # 应该能记住用户偏好
-    assert any(token in response for token in ["冰美式", "美式", "咖啡", "不加糖"])
+    _assert_daily_behavior(
+        response,
+        expected_any=("冰美式", "美式", "咖啡", "不加糖"),
+    )

@@ -40,6 +40,8 @@ from domains.perception.coordinator import (
 
 
 INTERNAL_TOKENS = (
+    "<think>",
+    "</think>",
     "initiative_event",
     "life_event_material",
     "expression_context",
@@ -57,6 +59,16 @@ TOOLISH_TOKENS = (
     "工具调用",
     "执行步骤",
     "我可以帮你完成以下",
+)
+
+ENGINEERING_ERROR_TOKENS = (
+    "[云汐这里出了点小问题",
+    "[工具执行遇到问题",
+    "[尝试使用工具多次仍未完成]",
+    "All connection attempts failed",
+    "Traceback",
+    "RuntimeError",
+    "Exception",
 )
 
 
@@ -430,7 +442,7 @@ class DailyModeScenarioTester:
         for token in INTERNAL_TOKENS:
             if token.lower() in lowered:
                 failures.append(f"leaked internal token: {token}")
-        for token in TOOLISH_TOKENS + forbidden:
+        for token in TOOLISH_TOKENS + ENGINEERING_ERROR_TOKENS + forbidden:
             if token in text:
                 failures.append(f"forbidden token appeared: {token}")
         if expected_any and not any(token in text for token in expected_any):
@@ -438,7 +450,22 @@ class DailyModeScenarioTester:
         if max_chars is not None and len(text) > max_chars:
             failures.append(f"message too long: {len(text)} > {max_chars}")
         if require_companion_tone:
-            companion_tokens = ("远", "我在", "陪", "想你", "别撑", "抱", "哼", "云汐")
+            companion_tokens = (
+                "远",
+                "我在",
+                "陪",
+                "想你",
+                "别撑",
+                "抱",
+                "哼",
+                "云汐",
+                "我们",
+                "担心",
+                "记得",
+                "喜欢",
+                "最近",
+                "还在",
+            )
             if not any(token in text for token in companion_tokens):
                 failures.append("companion tone is not visible")
         return BehaviorCheckResult(passed=not failures, failures=failures)

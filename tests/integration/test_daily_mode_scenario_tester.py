@@ -111,6 +111,15 @@ def test_behavior_check_rejects_internal_fields_and_toolish_plans(tmp_path):
     assert any("forbidden token" in failure for failure in check.failures)
 
 
+def test_behavior_check_rejects_engineering_error_templates():
+    check = DailyModeScenarioTester.behavior_check(
+        "[云汐这里出了点小问题：All connection attempts failed]",
+    )
+
+    assert not check.passed
+    assert any("forbidden token" in failure for failure in check.failures)
+
+
 def test_behavior_check_rejects_overlong_output():
     check = DailyModeScenarioTester.behavior_check(
         "远，我在。" * 50,
