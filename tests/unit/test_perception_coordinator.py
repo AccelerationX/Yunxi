@@ -1,8 +1,13 @@
 """PerceptionCoordinator 单元测试。"""
 
+import time
+
 from domains.perception.coordinator import (
+    LayeredPerceptionProvider,
+    PerceptionLayer,
     PerceptionCoordinator,
     PerceptionSnapshot,
+    SystemState,
     TimeContext,
     UserPresence,
 )
@@ -71,3 +76,55 @@ def test_provider_snapshot_is_used_after_injection_window():
     assert snapshot.time_context.hour == 11
     assert snapshot.user_presence.focused_application == "真实前台窗口"
     assert snapshot.user_presence.idle_duration == 12
+
+
+class SlowPerceptionProvider:
+    """A provider that should be degraded by timeout."""
+
+    def fetch(self) -> PerceptionSnapshot:
+        time.sleep(0.2)
+        return PerceptionSnapshot(
+            user_presence=UserPresence(focused_application="慢速窗口")
+        )
+
+
+def test_layered_provider_degrades_slow_optional_layer():
+    provider = LayeredPerceptionProvider(
+        layers=[
+            PerceptionLayer(
+                name="fast",
+                provider=StaticPerceptionProvider(
+                    PerceptionSnapshot(
+                        time_context=TimeContext(
+                            readable_time="2026-04-16 12:00",
+                            hour=12,
+                        )
+                    )
+                ),
+                timeout_seconds=0.05,
+                optional=False,
+            ),
+            PerceptionLayer(
+                name="slow",
+                provider=SlowPerceptionProvider(),
+                timeout_seconds=0.01,
+                optional=True,
+            ),
+            PerceptionLayer(
+                name="system",
+                provider=StaticPerceptionProvider(
+                    PerceptionSnapshot(system_state=SystemState(cpu_percent=12.5))
+                ),
+                timeout_seconds=0.05,
+                optional=True,
+            ),
+        ]
+    )
+
+    snapshot = provider.fetch()
+    provider.close()
+
+    assert snapshot.time_context.hour == 12
+    assert snapshot.system_state.cpu_percent == 12.5
+    assert snapshot.user_presence.focused_application == ""
+    assert provider.last_failures == {"slow": "timeout"}

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ctypes
+import concurrent.futures
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -61,25 +62,32 @@ class PerceptionProvider(Protocol):
         """采集当前感知快照。"""
 
 
-class WindowsPerceptionProvider:
-    """基于 Windows 桌面环境的默认感知提供者。"""
+class TimePerceptionProvider:
+    """Fast local time perception."""
 
     def fetch(self) -> PerceptionSnapshot:
-        """采集当前时间、前台窗口、idle 时长和基础系统状态。"""
+        """Collect current local time."""
         now = datetime.now()
-        idle_seconds = self._idle_duration_seconds()
         return PerceptionSnapshot(
             time_context=TimeContext(
                 readable_time=now.strftime("%Y-%m-%d %H:%M:%S"),
                 hour=now.hour,
-            ),
+            )
+        )
+
+
+class WindowsUserPresenceProvider:
+    """Windows foreground-window and idle perception."""
+
+    def fetch(self) -> PerceptionSnapshot:
+        """Collect foreground app and keyboard-idle state."""
+        idle_seconds = self._idle_duration_seconds()
+        return PerceptionSnapshot(
             user_presence=UserPresence(
                 focused_application=self._focused_application(),
                 idle_duration=idle_seconds,
                 is_at_keyboard=idle_seconds < 60.0,
             ),
-            system_state=SystemState(cpu_percent=self._cpu_percent()),
-            external_info=ExternalInfo(),
         )
 
     def _focused_application(self) -> str:
@@ -121,6 +129,14 @@ class WindowsPerceptionProvider:
             logger.debug("Failed to read idle duration: %s", exc)
             return 0.0
 
+
+class SystemResourceProvider:
+    """Fast local system resource perception."""
+
+    def fetch(self) -> PerceptionSnapshot:
+        """Collect basic system state."""
+        return PerceptionSnapshot(system_state=SystemState(cpu_percent=self._cpu_percent()))
+
     def _cpu_percent(self) -> float:
         """读取系统 CPU 占用率。"""
         try:
@@ -135,6 +151,117 @@ class WindowsPerceptionProvider:
             return 0.0
 
 
+class WindowsPerceptionProvider:
+    """Backward-compatible one-shot Windows perception provider."""
+
+    def __init__(self) -> None:
+        self._time = TimePerceptionProvider()
+        self._presence = WindowsUserPresenceProvider()
+        self._system = SystemResourceProvider()
+
+    def fetch(self) -> PerceptionSnapshot:
+        """采集当前时间、前台窗口、idle 时长和基础系统状态。"""
+        return merge_snapshots(
+            self._time.fetch(),
+            self._presence.fetch(),
+            self._system.fetch(),
+        )
+
+
+@dataclass(frozen=True)
+class PerceptionLayer:
+    """One perception provider layer with an independent timeout."""
+
+    name: str
+    provider: PerceptionProvider
+    timeout_seconds: float = 0.5
+    optional: bool = True
+
+
+class LayeredPerceptionProvider:
+    """Run perception providers by layer with timeout and degradation."""
+
+    def __init__(
+        self,
+        layers: Optional[List[PerceptionLayer]] = None,
+        fallback: Optional[PerceptionSnapshot] = None,
+    ) -> None:
+        self.layers = layers or [
+            PerceptionLayer(
+                name="basic_time",
+                provider=TimePerceptionProvider(),
+                timeout_seconds=0.2,
+                optional=False,
+            ),
+            PerceptionLayer(
+                name="desktop_presence",
+                provider=WindowsUserPresenceProvider(),
+                timeout_seconds=1.0,
+                optional=True,
+            ),
+            PerceptionLayer(
+                name="system_resource",
+                provider=SystemResourceProvider(),
+                timeout_seconds=0.5,
+                optional=True,
+            ),
+        ]
+        self.fallback = fallback or PerceptionSnapshot()
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, len(self.layers)),
+            thread_name_prefix="yunxi-perception",
+        )
+        self.last_failures: Dict[str, str] = {}
+
+    def fetch(self) -> PerceptionSnapshot:
+        """Collect a merged snapshot while degrading slow or failed layers."""
+        snapshots: List[PerceptionSnapshot] = []
+        failures: Dict[str, str] = {}
+
+        for layer in self.layers:
+            future = self._executor.submit(layer.provider.fetch)
+            try:
+                snapshots.append(future.result(timeout=layer.timeout_seconds))
+            except concurrent.futures.TimeoutError:
+                failures[layer.name] = "timeout"
+                future.cancel()
+                if not layer.optional:
+                    logger.warning("Required perception layer timed out: %s", layer.name)
+            except Exception as exc:
+                failures[layer.name] = exc.__class__.__name__
+                logger.debug("Perception layer failed: %s: %s", layer.name, exc)
+                if not layer.optional:
+                    logger.warning("Required perception layer failed: %s", layer.name)
+
+        self.last_failures = failures
+        if not snapshots:
+            return self.fallback
+        return merge_snapshots(*snapshots)
+
+    def close(self) -> None:
+        """Stop perception worker threads without waiting on stuck providers."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+def merge_snapshots(*snapshots: PerceptionSnapshot) -> PerceptionSnapshot:
+    """Merge partial perception snapshots into one complete snapshot."""
+    merged = PerceptionSnapshot()
+    for snapshot in snapshots:
+        if snapshot.time_context.readable_time or snapshot.time_context.hour:
+            merged.time_context = snapshot.time_context
+        if (
+            snapshot.user_presence.focused_application
+            or snapshot.user_presence.idle_duration
+            or not snapshot.user_presence.is_at_keyboard
+        ):
+            merged.user_presence = snapshot.user_presence
+        if snapshot.system_state.cpu_percent:
+            merged.system_state = snapshot.system_state
+        if snapshot.external_info.weather:
+            merged.external_info = snapshot.external_info
+    return merged
+
+
 class PerceptionCoordinator:
     """感知协调器。
 
@@ -145,7 +272,7 @@ class PerceptionCoordinator:
         self._current_snapshot = PerceptionSnapshot()
         self._previous_snapshot: Optional[PerceptionSnapshot] = None
         self._injected_snapshot_pending = False
-        self._provider = provider or WindowsPerceptionProvider()
+        self._provider = provider or LayeredPerceptionProvider()
 
     def get_snapshot(self) -> PerceptionSnapshot:
         """返回当前感知快照。"""
@@ -174,6 +301,12 @@ class PerceptionCoordinator:
     def _fetch_snapshot(self) -> PerceptionSnapshot:
         """采集当前真实感知数据。"""
         return self._provider.fetch()
+
+    def close(self) -> None:
+        """Release provider resources when supported."""
+        close = getattr(self._provider, "close", None)
+        if callable(close):
+            close()
 
     def _compute_events(
         self,

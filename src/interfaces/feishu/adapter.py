@@ -51,13 +51,16 @@ class FeishuAdapter:
 
             if response:
                 # 发送回复到飞书
-                await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     self.feishu_client.send_text,
                     content=response,
                     receive_id=chat_id,
                     receive_id_type="chat_id",
                 )
-                logger.info(f"已发送回复: {response[:50]}...")
+                if result.get("code") == 0:
+                    logger.info(f"已发送回复: {response[:50]}...")
+                else:
+                    logger.warning("飞书回复发送失败: %s", result.get("msg"))
             else:
                 logger.warning("runtime.chat() 返回空内容")
 
@@ -67,7 +70,7 @@ class FeishuAdapter:
             try:
                 await asyncio.to_thread(
                     self.feishu_client.send_text,
-                    content=f"抱歉，处理出错了：{str(e)[:100]}",
+                    content="远，我这边刚刚卡了一下，但我已经停住了。你再跟我说一遍，我重新陪你处理。",
                     receive_id=chat_id,
                     receive_id_type="chat_id",
                 )

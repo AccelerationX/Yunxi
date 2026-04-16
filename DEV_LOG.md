@@ -39,6 +39,54 @@
 
 ---
 
+## [2026-04-16] 阶段 5 准备完成：飞书日常模拟测试前置修复
+
+**状态**：已完成飞书日常模拟测试前置修复。当前不再继续扩展 WebUI 聊天入口，下一步可以进入飞书 live 日常模拟测试。
+
+### 完成内容
+
+- 分层感知与超时降级：
+  - 新增 `LayeredPerceptionProvider`、`PerceptionLayer`、`TimePerceptionProvider`、`WindowsUserPresenceProvider`、`SystemResourceProvider`。
+  - 默认感知拆成基础时间、桌面在场、系统资源三层，每层独立 timeout。
+  - 慢速或异常 optional provider 会降级，不阻塞整轮聊天。
+  - `PerceptionCoordinator.close()` 支持释放 provider 资源，daemon `close_runtime()` 已调用。
+- 飞书入口前置链路：
+  - `FeishuAdapter.handle_message()` 对发送结果做失败日志记录。
+  - runtime 异常时，飞书用户可见回复改为云汐人格化表达，不暴露网络/技术错误。
+  - 补充飞书确认链路测试：用户通过飞书回复“确认”会继续进入 Runtime pending confirmation 流程。
+- deep healthcheck：
+  - daemon 新增 `--healthcheck-deep`。
+  - 覆盖 runtime build、runtime status、LLM ping、memory summary、event library、continuity read/write、Feishu config、resource close。
+  - 新增 `--skip-llm-ping`，用于本地无网络/不想触发模型请求时做结构健康检查。
+- WebUI/Tray 状态控制面板基础：
+  - `RuntimeStatus` 增加 `pending_confirmation_count`、`daily_channel="feishu"`、`factory_entry_command="yunxi"`。
+  - 新增 `ControlPanelSnapshot`、日志读取、`create_status_app()`。
+  - WebUI 只暴露 `/api/status`、`/api/logs`、`/api/factory-entry`，不提供聊天接口。
+
+### 已验证
+
+- `python -m py_compile src\domains\perception\coordinator.py src\apps\daemon\main.py src\interfaces\feishu\adapter.py src\apps\tray\web_server.py tests\unit\test_perception_coordinator.py tests\unit\test_daemon_healthcheck.py tests\unit\test_feishu_adapter.py tests\integration\test_phase5_daily_mode.py` -> passed
+- `python -m pytest -q tests\unit\test_perception_coordinator.py tests\unit\test_daemon_healthcheck.py tests\unit\test_feishu_adapter.py tests\integration\test_phase5_daily_mode.py` -> 16 passed
+- `python -m pytest -q tests\unit tests\domains\memory` -> 100 passed
+- `python -m pytest -q tests\integration\test_daily_mode_scenario_tester.py tests\integration\test_phase4_runtime.py tests\integration\test_phase5_daily_mode.py tests\integration\test_conversation_tester_baseline.py tests\integration\test_daemon_stability.py -m "not real_llm and not desktop_mcp"` -> 32 passed
+- `$env:PYTHONPATH='src'; python src\apps\daemon\main.py --provider ollama --disable-tool-use --skip-desktop-mcp --healthcheck-deep --skip-llm-ping` -> passed
+- `$env:PYTHONPATH='src'; python src\apps\daemon\main.py --provider ollama --disable-tool-use --skip-desktop-mcp --healthcheck-deep --skip-llm-ping --feishu-enable` -> passed，`feishu_config=configured`
+- `.\yunxi.cmd --status` -> passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k ollama` -> 2 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py -m real_llm -k moonshot` -> 2 passed
+- `python -m pytest -q tests\integration\test_moonshot_cloud_matrix.py -m real_llm` -> 6 passed
+- `python -m pytest -q tests\integration\test_daily_mode_feishu_live.py -m "real_llm and feishu_live"` -> 1 skipped（未设置 `FEISHU_LIVE_TEST=1`，未误发真实消息）
+
+### 下一步
+
+进入飞书日常模拟测试。建议顺序：
+1. 先开启 `FEISHU_LIVE_TEST=1` 跑现有飞书 live 主动发送测试，确认真实发送链路。
+2. 再启动 daemon `--feishu-enable`，手动向云汐发普通消息，确认收消息、Runtime 回复和飞书回发。
+3. 触发一个需要确认的工具请求，通过飞书回复“确认/取消”，验证 pending tool confirmation 闭环。
+4. 让 Presence 主动 tick 真实发一条主动消息，验证日常模式主动触达。
+
+---
+
 ## [2026-04-16] 阶段 4 完成：日常工具确认和错误人格化
 
 **状态**：已完成首版。阶段 4 目标是让 daily_mode 下工具请求不再直接变成安全错误，并避免把工程异常暴露给用户。

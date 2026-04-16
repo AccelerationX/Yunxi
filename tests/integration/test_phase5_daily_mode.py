@@ -2,7 +2,11 @@
 
 import pytest
 
-from apps.tray.web_server import build_runtime_status
+from apps.tray.web_server import (
+    build_control_panel_snapshot,
+    build_runtime_status,
+    create_status_app,
+)
 from tests.integration.conversation_tester import YunxiConversationTester
 
 
@@ -44,3 +48,30 @@ def test_tray_status_reflects_runtime_state():
     assert status.emotion == "开心"
     assert status.miss_value == 12
     assert status.continuity_size == 1
+    assert status.daily_channel == "feishu"
+    assert status.factory_entry_command == "yunxi"
+
+
+def test_control_panel_snapshot_reads_logs(tmp_path):
+    tester = YunxiConversationTester()
+    tester.reset()
+    log_path = tmp_path / "yunxi.log"
+    log_path.write_text("line1\nline2\n", encoding="utf-8")
+
+    snapshot = build_control_panel_snapshot(tester.runtime, [log_path], max_log_lines=1)
+
+    assert snapshot.recent_logs == ["line2"]
+    assert snapshot.factory_entry_command == "yunxi"
+
+
+def test_status_app_exposes_control_panel_routes():
+    tester = YunxiConversationTester()
+    tester.reset()
+
+    app = create_status_app(tester.runtime)
+    route_paths = {route.resource.canonical for route in app.router.routes()}
+
+    assert "/" in route_paths
+    assert "/api/status" in route_paths
+    assert "/api/logs" in route_paths
+    assert "/api/factory-entry" in route_paths

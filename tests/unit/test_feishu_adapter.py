@@ -20,6 +20,22 @@ class FakeRuntime:
         return f"云汐回复：{content}"
 
 
+class PendingRuntime:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def chat(self, content: str) -> str:
+        self.messages.append(content)
+        if content == "确认":
+            return "好，我已经按你点头的那一步处理好了。"
+        return "这一步会改动你的电脑状态，我想先等你点头。"
+
+
+class FailingRuntime:
+    async def chat(self, content: str) -> str:
+        raise RuntimeError("All connection attempts failed")
+
+
 class FakeFeishuClient:
     def __init__(self) -> None:
         self.sent_texts: list[dict[str, str]] = []
@@ -110,3 +126,37 @@ async def test_feishu_proactive_send_uses_async_path():
     await adapter.send_proactive_message("远，我在。")
 
     assert client.proactive_texts == ["远，我在。"]
+
+
+@pytest.mark.asyncio
+async def test_feishu_confirmation_message_goes_through_runtime():
+    runtime = PendingRuntime()
+    client = FakeFeishuClient()
+    adapter = FeishuAdapter(
+        runtime=runtime,
+        feishu_client=client,
+        event_loop=asyncio.get_running_loop(),
+    )
+
+    await adapter.handle_message("user-1", "chat-1", "帮我写入剪贴板")
+    await adapter.handle_message("user-1", "chat-1", "确认")
+
+    assert runtime.messages == ["帮我写入剪贴板", "确认"]
+    assert "点头" in client.sent_texts[0]["content"]
+    assert "已经按你点头" in client.sent_texts[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_feishu_runtime_error_reply_hides_technical_detail():
+    client = FakeFeishuClient()
+    adapter = FeishuAdapter(
+        runtime=FailingRuntime(),
+        feishu_client=client,
+        event_loop=asyncio.get_running_loop(),
+    )
+
+    await adapter.handle_message("user-1", "chat-1", "你好")
+
+    reply = client.sent_texts[0]["content"]
+    assert "All connection attempts failed" not in reply
+    assert "卡了一下" in reply
