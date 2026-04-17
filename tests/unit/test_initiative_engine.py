@@ -74,7 +74,7 @@ def test_engine_resets_stale_daily_budget_before_evaluating():
     assert continuity.recent_proactive_count == 0
 
 
-def test_engine_marks_restrained_followup_after_unanswered_message():
+def test_engine_suppresses_restrained_followup_after_unanswered_message():
     heart = HeartLake()
     heart.current_emotion = "想念"
     heart.miss_value = 95
@@ -87,8 +87,35 @@ def test_engine_marks_restrained_followup_after_unanswered_message():
         unanswered_proactive_count=1,
     )
 
-    assert decision.trigger is True
-    assert decision.expression_mode == "restrained_followup"
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
+    assert "更克制" in decision.reason
+
+
+def test_engine_suppresses_low_urgency_idle_followup_when_unanswered():
+    heart = HeartLake()
+    heart.current_emotion = "平静"
+    heart.miss_value = 70
+    engine = InitiativeEngine(cooldown_seconds=0)
+    snapshot = PerceptionSnapshot(
+        user_presence=UserPresence(
+            focused_application="Desktop",
+            foreground_process_name="explorer.exe",
+            idle_duration=420,
+            is_at_keyboard=False,
+        )
+    )
+
+    decision = engine.evaluate(
+        heart_lake=heart,
+        events=[PerceptionEvent(event_type="long_idle", description="away")],
+        current_time=1.0,
+        unanswered_proactive_count=1,
+        perception_snapshot=snapshot,
+    )
+
+    assert decision.trigger is False
+    assert decision.suppression_reason == "score_below_threshold"
     assert "更克制" in decision.reason
 
 

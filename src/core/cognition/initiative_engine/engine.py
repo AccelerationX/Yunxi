@@ -223,7 +223,7 @@ class InitiativeEngine:
                 expression_mode = "low_interrupt"
 
         if unanswered_proactive_count > 0:
-            score -= 0.20 * unanswered_proactive_count
+            score -= 0.50 * unanswered_proactive_count
             reasons.append("之前的主动还没有得到回应，需要更克制")
             expression_mode = "restrained_followup"
 
