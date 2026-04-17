@@ -129,6 +129,8 @@
 - 2 小时 Presence Murmur 常驻浸泡第四轮 -> failed；duration 7200s，tick 0 合格，tick 1-18 克制正常，tick 19 在 away 状态触发普通主动长消息，已修未回复降权。
 - `python -m pytest -q tests\unit\test_initiative_engine.py tests\unit\test_prompt_builder.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_when_generated_as_question_or_topic tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 30 passed
 - `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
+- 2 小时 Presence Murmur 常驻浸泡第五轮 -> passed；run_id `20260417_153331`，duration 7200s，tick interval 300s，provider moonshot，message_count 1，唯一消息为“云汐在这里，偷偷地探头看看你。”，work/high-input、fullscreen game、idle/away 未回复状态均未追发，failures 为空。
+- 飞书真实触达节奏测试 -> passed；run_dir `logs\feishu_presence_cadence\20260417_182630`，真实发送 1 条“云汐轻轻戳一下远的屏幕边。”，立即第二次 tick 返回 null，presence_murmur_count=1，unanswered_proactive_count=1，failures 为空。
 
 ### 当前边界
 
