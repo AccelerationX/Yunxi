@@ -41,7 +41,7 @@ class ProactiveGenerationContextBuilder:
                     "presence_murmur_boundary:",
                     "- The final message must be one short sentence or phrase.",
                     "- It may be emotionally warm but can be content-free.",
-                    "- Do not recommend articles, videos, links, searches, news, or newly published content.",
+                    "- Do not recommend articles, videos, links, searches, weather, news, or newly published content.",
                     "- Do not ask whether Yuan is interested, and do not offer to send more material.",
                     "- Do not start a task, plan, checklist, or research thread.",
                 ]

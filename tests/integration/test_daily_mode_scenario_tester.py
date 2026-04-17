@@ -148,12 +148,12 @@ async def test_presence_murmur_retries_once_when_exact_sentence_repeats(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_presence_murmur_retries_when_generated_as_question_or_recommendation(tmp_path):
+async def test_presence_murmur_retries_when_generated_as_question_or_topic(tmp_path):
     tester = await DailyModeScenarioTester.create(
         tmp_path,
         ScenarioConfig(provider="mock", cooldown_seconds=0),
         scripted_responses=[
-            "远，广州今天天气怎么样？",
+            "远，今天的天气真好。",
             "戳一下，我在哦～",
         ],
     )
@@ -173,7 +173,7 @@ async def test_presence_murmur_retries_when_generated_as_question_or_recommendat
         assert message == "戳一下，我在哦～"
         assert tester.runtime.continuity.has_recent_presence_murmur("戳一下，我在哦～")
         assert not tester.runtime.continuity.has_recent_presence_murmur(
-            "远，广州今天天气怎么样？"
+            "远，今天的天气真好。"
         )
         assert "不要问问题" in tester.last_system_prompt()
         assert "不要提新闻、搜索、链接、天气" in tester.last_system_prompt()

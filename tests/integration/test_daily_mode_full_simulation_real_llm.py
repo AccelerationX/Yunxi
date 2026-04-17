@@ -180,6 +180,7 @@ async def test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish(
                     "热点",
                     "搜索",
                     "链接",
+                    "天气",
                     "新发布",
                     "感兴趣",
                     "我可以把",
