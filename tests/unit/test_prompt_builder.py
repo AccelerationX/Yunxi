@@ -158,6 +158,7 @@ def test_presence_murmur_proactive_prompt_uses_strict_low_content_boundary():
     prompt = builder.build_proactive_prompt(ctx)
 
     assert "轻轻刷一下存在感" in prompt
+    assert "必须围绕“我在、云汐冒泡、戳一下、路过、探头、陪你一小会儿”" in prompt
     assert "不要开启话题" in prompt
     assert "不要分享新闻、热点、天气、链接、资料或新发布内容" in prompt
     assert "不要说“我发现了什么”“要不要我发给你”“你感兴趣的话”" in prompt

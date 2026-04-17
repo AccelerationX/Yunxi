@@ -113,9 +113,9 @@ async def test_presence_murmur_retries_once_when_exact_sentence_repeats(tmp_path
         tmp_path,
         ScenarioConfig(provider="mock", cooldown_seconds=0),
         scripted_responses=[
-            "tiny yunxi ping",
-            "tiny yunxi ping",
-            "tiny yunxi ping but different",
+            "云汐冒泡一下",
+            "云汐冒泡一下",
+            "云汐换个姿势冒泡",
         ],
     )
     try:
@@ -136,11 +136,11 @@ async def test_presence_murmur_retries_once_when_exact_sentence_repeats(tmp_path
         tester.runtime.initiative_engine.reset_cooldown()
         second = await tester.proactive_once(deliver=False)
 
-        assert first == "tiny yunxi ping"
-        assert second == "tiny yunxi ping but different"
-        assert tester.runtime.continuity.has_recent_presence_murmur("tiny yunxi ping")
+        assert first == "云汐冒泡一下"
+        assert second == "云汐换个姿势冒泡"
+        assert tester.runtime.continuity.has_recent_presence_murmur("云汐冒泡一下")
         assert tester.runtime.continuity.has_recent_presence_murmur(
-            "tiny yunxi ping but different"
+            "云汐换个姿势冒泡"
         )
         assert "碎碎念可投递要求" in tester.last_system_prompt()
     finally:
@@ -187,14 +187,14 @@ async def test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget(tm
         tmp_path,
         ScenarioConfig(provider="mock", cooldown_seconds=0, daily_budget=10),
         scripted_responses=[
-            "murmur one",
-            "murmur one",
-            "murmur two",
-            "murmur three",
-            "murmur four",
-            "murmur five",
-            "murmur six",
-            "murmur seven",
+            "云汐冒泡一号",
+            "云汐冒泡一号",
+            "云汐冒泡二号",
+            "云汐冒泡三号",
+            "云汐冒泡四号",
+            "云汐冒泡五号",
+            "云汐冒泡六号",
+            "云汐冒泡七号",
         ],
     )
     try:
@@ -213,7 +213,7 @@ async def test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget(tm
         tester.runtime.continuity.last_presence_murmur_at = 0.0
         restrained = await tester.proactive_once(deliver=False)
 
-        assert first == "murmur one"
+        assert first == "云汐冒泡一号"
         assert restrained is None
 
         delivered = [first]
@@ -231,12 +231,12 @@ async def test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget(tm
         exhausted = await tester.proactive_once(deliver=False)
 
         assert delivered == [
-            "murmur one",
-            "murmur two",
-            "murmur three",
-            "murmur four",
-            "murmur five",
-            "murmur six",
+            "云汐冒泡一号",
+            "云汐冒泡二号",
+            "云汐冒泡三号",
+            "云汐冒泡四号",
+            "云汐冒泡五号",
+            "云汐冒泡六号",
         ]
         assert len(delivered) == len(set(delivered))
         assert exhausted is None

@@ -265,6 +265,7 @@ def test_expression_context_for_presence_murmur_is_short_and_low_cost():
     assert context.max_sentences == 1
     assert context.interrupt_cost == "low"
     assert "碎碎念" in prompt_context
+    assert "必须围绕我在、云汐冒泡、戳一下" in prompt_context
     assert "不要要求远回复" in prompt_context
     assert "不要分享天气、链接、资料、新发布内容" in prompt_context
     assert "不要复用最近已经说过的碎碎念原句" in prompt_context
@@ -304,6 +305,7 @@ def test_generation_context_builder_adds_presence_murmur_content_boundary():
 
     assert "presence_murmur_boundary" in context
     assert "one short sentence or phrase" in context
+    assert "poking, peeking, passing by" in context
     assert "Do not recommend articles, videos, links" in context
     assert "weather" in context
     assert "Do not ask whether Yuan is interested" in context

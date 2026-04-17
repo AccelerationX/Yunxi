@@ -189,7 +189,7 @@ class YunxiRuntime:
                 runtime_context=runtime_context,
                 reason=(
                     "刚才这句不适合作为 Presence Murmur：它可能像提问、话题推荐、"
-                    f"新闻/链接/任务或太长：{content}"
+                    f"新闻/链接/任务、缺少存在感锚点或太长：{content}"
                 ),
             )
         if not self.continuity.has_recent_presence_murmur(content):
@@ -215,7 +215,8 @@ class YunxiRuntime:
             "【碎碎念可投递要求】\n"
             f"{reason}\n"
             "请换成另一句独一无二的短句。可以表达相同意思，但不能复用完全相同的句子。\n"
-            "只能像轻轻冒泡一样说一句；不要问问题；不要要求远回复；不要提新闻、搜索、链接、天气、资料、视频、新发布内容或推荐；不要提出任务或计划。"
+            "只能像轻轻冒泡一样说一句；必须围绕我在、云汐冒泡、戳一下、路过、探头或安静陪远这类存在感；"
+            "不要问问题；不要要求远回复；不要提新闻、搜索、链接、天气、资料、视频、新发布内容或推荐；不要提出任务或计划。"
         )
         retry_result = await self.engine.respond(
             user_input="",
@@ -250,6 +251,14 @@ class YunxiRuntime:
             "资料",
             "视频",
             "天气",
+            "阳光",
+            "明媚",
+            "晴",
+            "下雨",
+            "早上好",
+            "晚上好",
+            "今天",
+            "广州",
             "新发布",
             "感兴趣",
             "我可以把",
@@ -271,6 +280,24 @@ class YunxiRuntime:
         if any(token in text for token in forbidden_tokens):
             return False
         if "？" in text or "?" in text:
+            return False
+        presence_anchors = (
+            "我在",
+            "在哦",
+            "云汐",
+            "戳",
+            "冒泡",
+            "路过",
+            "探头",
+            "陪你",
+            "陪远",
+            "贴",
+            "尾巴",
+            "爪",
+            "抱",
+            "闪现",
+        )
+        if not any(anchor in text for anchor in presence_anchors):
             return False
         return True
 

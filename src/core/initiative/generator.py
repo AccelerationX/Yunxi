@@ -40,6 +40,7 @@ class ProactiveGenerationContextBuilder:
                     "",
                     "presence_murmur_boundary:",
                     "- The final message must be one short sentence or phrase.",
+                    "- It must be anchored in presence, such as 'I am here', Yunxi bubbling up, poking, peeking, passing by, or quietly accompanying Yuan.",
                     "- It may be emotionally warm but can be content-free.",
                     "- Do not recommend articles, videos, links, searches, weather, news, or newly published content.",
                     "- Do not ask whether Yuan is interested, and do not offer to send more material.",

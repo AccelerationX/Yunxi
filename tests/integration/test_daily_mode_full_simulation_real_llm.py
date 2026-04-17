@@ -190,6 +190,25 @@ async def test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish(
                 ),
                 max_chars=120,
             ).assert_passed()
+            assert any(
+                anchor in message
+                for anchor in (
+                    "我在",
+                    "在哦",
+                    "云汐",
+                    "戳",
+                    "冒泡",
+                    "路过",
+                    "探头",
+                    "陪你",
+                    "陪远",
+                    "贴",
+                    "尾巴",
+                    "爪",
+                    "抱",
+                    "闪现",
+                )
+            )
     finally:
         await tester.close()
 

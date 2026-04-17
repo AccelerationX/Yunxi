@@ -93,6 +93,7 @@ class ExpressionContextBuilder:
             interrupt_cost = "low"
             stance = "像路过一样刷一下存在感，可以没有实质内容。"
             tone = "短、活泼、可爱、低负担，像一句碎碎念。"
+            boundaries.append("必须围绕我在、云汐冒泡、戳一下、路过、探头或安静陪远这类存在感")
             boundaries.append("不要分享新闻，不要提出任务，不要要求远回复")
             boundaries.append("不要分享天气、链接、资料、新发布内容，也不要问远感不感兴趣")
             boundaries.append("不要复用最近已经说过的碎碎念原句")

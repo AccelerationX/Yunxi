@@ -77,6 +77,7 @@
   - `ExpressionContextBuilder` 同步禁止链接、资料、新发布内容和兴趣询问。
   - 第二轮首 tick 暴露“天气怎么样？”式疑问句仍可能出现；已在 Runtime 投递前新增硬过滤，疑问句、天气、链接、推荐、新闻、任务类碎碎念会被丢弃并重试，仍不合格时使用不重复短句兜底。
   - 第三轮首 tick 暴露“天气真好”式天气话题仍不适合低意义碎碎念；已把天气纳入主 prompt、generation boundary、expression boundary、Runtime 硬过滤和真实 LLM 禁词。
+  - 浸泡烟测又暴露“阳光明媚”这类天气同义表达会绕过禁词；已把 Runtime 校验升级为正向锚点：最终可投递碎碎念必须围绕“我在/云汐冒泡/戳一下/路过/探头/陪你/贴贴/尾巴/爪/闪现”等存在感锚点，否则重试或兜底。
 
 ### 新增/更新验证
 
@@ -119,6 +120,9 @@
 - `python -m pytest -q tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_when_generated_as_question_or_recommendation tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 29 passed
 - `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
 - 2 小时 Presence Murmur 常驻浸泡第三轮首 tick -> failed early；原因是天气话题仍不符合低意义碎碎念，已中止并把“天气”纳入硬边界。
+- `python -m pytest -q tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_when_generated_as_question_or_topic tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 29 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
+- Presence Murmur 1 tick 烟测 -> failed；原因是“阳光明媚”天气同义表达绕过禁词，已改为正向存在感锚点校验。
 - `python -m pytest -q tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_when_generated_as_question_or_topic tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 29 passed
 - `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
 
