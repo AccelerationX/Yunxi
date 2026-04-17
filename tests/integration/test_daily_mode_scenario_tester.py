@@ -142,7 +142,41 @@ async def test_presence_murmur_retries_once_when_exact_sentence_repeats(tmp_path
         assert tester.runtime.continuity.has_recent_presence_murmur(
             "tiny yunxi ping but different"
         )
-        assert "碎碎念去重要求" in tester.last_system_prompt()
+        assert "碎碎念可投递要求" in tester.last_system_prompt()
+    finally:
+        await tester.close()
+
+
+@pytest.mark.asyncio
+async def test_presence_murmur_retries_when_generated_as_question_or_recommendation(tmp_path):
+    tester = await DailyModeScenarioTester.create(
+        tmp_path,
+        ScenarioConfig(provider="mock", cooldown_seconds=0),
+        scripted_responses=[
+            "远，广州今天天气怎么样？",
+            "戳一下，我在哦～",
+        ],
+    )
+    try:
+        tester.set_emotion("开心", miss_value=15, security=85)
+        tester.runtime.heart_lake.playfulness = 78
+        tester.runtime.heart_lake.intimacy_warmth = 76
+        tester.set_perception(
+            focused_application="YouTube - Chrome",
+            idle_duration=20,
+            is_at_keyboard=True,
+            hour=20,
+        )
+
+        message = await tester.proactive_once(deliver=False)
+
+        assert message == "戳一下，我在哦～"
+        assert tester.runtime.continuity.has_recent_presence_murmur("戳一下，我在哦～")
+        assert not tester.runtime.continuity.has_recent_presence_murmur(
+            "远，广州今天天气怎么样？"
+        )
+        assert "不要问问题" in tester.last_system_prompt()
+        assert "不要提新闻、搜索、链接、天气" in tester.last_system_prompt()
     finally:
         await tester.close()
 

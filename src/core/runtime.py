@@ -177,16 +177,45 @@ class YunxiRuntime:
         content = (content or "").strip()
         if not content:
             self._drop_unsent_assistant_message("")
-            return self._fallback_unique_presence_murmur()
+            return await self._retry_presence_murmur(
+                system_prompt=system_prompt,
+                runtime_context=runtime_context,
+                reason="刚才没有生成可投递的碎碎念。",
+            )
+        if not self._is_deliverable_presence_murmur(content):
+            self._drop_unsent_assistant_message(content)
+            return await self._retry_presence_murmur(
+                system_prompt=system_prompt,
+                runtime_context=runtime_context,
+                reason=(
+                    "刚才这句不适合作为 Presence Murmur：它可能像提问、话题推荐、"
+                    f"新闻/链接/任务或太长：{content}"
+                ),
+            )
         if not self.continuity.has_recent_presence_murmur(content):
             return content
 
         self._drop_unsent_assistant_message(content)
+        return await self._retry_presence_murmur(
+            system_prompt=system_prompt,
+            runtime_context=runtime_context,
+            reason=f"刚才这句和已经发过的碎碎念完全相同：{content}",
+        )
+
+    async def _retry_presence_murmur(
+        self,
+        *,
+        system_prompt: str,
+        runtime_context: RuntimeContext,
+        reason: str,
+    ) -> Optional[str]:
+        """Retry one presence murmur with strict deliverability constraints."""
         retry_prompt = (
             f"{system_prompt}\n\n"
-            "【碎碎念去重要求】\n"
-            f"刚才这句和已经发过的碎碎念完全相同：{content}\n"
-            "请换成另一句独一无二的短句。可以表达相同意思，但不能复用完全相同的句子。"
+            "【碎碎念可投递要求】\n"
+            f"{reason}\n"
+            "请换成另一句独一无二的短句。可以表达相同意思，但不能复用完全相同的句子。\n"
+            "只能像轻轻冒泡一样说一句；不要问问题；不要要求远回复；不要提新闻、搜索、链接、天气、资料、视频、新发布内容或推荐；不要提出任务或计划。"
         )
         retry_result = await self.engine.respond(
             user_input="",
@@ -194,13 +223,55 @@ class YunxiRuntime:
             runtime_context=runtime_context,
         )
         retry_content = (retry_result.content or "").strip()
-        if retry_content and not self.continuity.has_recent_presence_murmur(retry_content):
+        if (
+            retry_content
+            and self._is_deliverable_presence_murmur(retry_content)
+            and not self.continuity.has_recent_presence_murmur(retry_content)
+        ):
             return retry_content
 
         if retry_content:
             self._drop_unsent_assistant_message(retry_content)
-        logger.info("Suppressed duplicate presence murmur: %s", content)
+        logger.info("Suppressed undeliverable presence murmur: %s", retry_content)
         return self._fallback_unique_presence_murmur()
+
+    def _is_deliverable_presence_murmur(self, content: str) -> bool:
+        """Return whether generated text is safe to deliver as a light murmur."""
+        text = " ".join((content or "").strip().split())
+        if not text:
+            return False
+        if len(text) > 80:
+            return False
+        forbidden_tokens = (
+            "新闻",
+            "热点",
+            "搜索",
+            "链接",
+            "资料",
+            "视频",
+            "新发布",
+            "感兴趣",
+            "我可以把",
+            "发给你",
+            "推荐",
+            "天气怎么样",
+            "怎么样",
+            "要不要",
+            "任务",
+            "计划",
+            "第一步",
+            "第二步",
+            "工具调用",
+            "life_event_material",
+            "initiative_decision",
+            "expression_context",
+            "generation_boundary",
+        )
+        if any(token in text for token in forbidden_tokens):
+            return False
+        if "？" in text or "?" in text:
+            return False
+        return True
 
     def _fallback_unique_presence_murmur(self) -> Optional[str]:
         """Generate a short unique murmur when the LLM gives no deliverable text."""

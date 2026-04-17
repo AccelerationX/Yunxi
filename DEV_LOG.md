@@ -75,6 +75,7 @@
   - `build_proactive_prompt()` 对 `presence_murmur` 改走专门低内容指令，不再使用“主动找他聊点什么”的通用主动话术。
   - `ProactiveGenerationContextBuilder` 新增 `presence_murmur_boundary`，明确禁止文章、视频、链接、搜索、新闻、新发布内容、任务计划和“感兴趣我发给你”式表达。
   - `ExpressionContextBuilder` 同步禁止链接、资料、新发布内容和兴趣询问。
+  - 第二轮首 tick 暴露“天气怎么样？”式疑问句仍可能出现；已在 Runtime 投递前新增硬过滤，疑问句、天气、链接、推荐、新闻、任务类碎碎念会被丢弃并重试，仍不合格时使用不重复短句兜底。
 
 ### 新增/更新验证
 
@@ -112,6 +113,9 @@
 - `git diff --check` -> passed（仅有两个已改测试文件的 CRLF/LF 提示，不是空白错误）
 - 2 小时 Presence Murmur 常驻浸泡首轮 tick -> failed early；原因是碎碎念生成成内容/链接推荐，已中止并修复。
 - `python -m pytest -q tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_triggers_in_leisure_state_without_event_material tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget` -> 28 passed
+- `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
+- 2 小时 Presence Murmur 常驻浸泡第二轮首 tick -> failed early；原因是疑问句“天气怎么样？”仍不符合低负担碎碎念，已中止并补 Runtime 投递前硬过滤。
+- `python -m pytest -q tests\unit\test_prompt_builder.py tests\unit\test_initiative_engine.py tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_once_when_exact_sentence_repeats tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_retries_when_generated_as_question_or_recommendation tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_soak_respects_unanswered_uniqueness_and_budget tests\integration\test_daily_mode_scenario_tester.py::test_presence_murmur_uses_unique_fallback_when_llm_returns_empty` -> 29 passed
 - `python -m pytest -q tests\integration\test_daily_mode_full_simulation_real_llm.py::test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish -m real_llm -rs` -> 2 passed
 
 ### 当前边界

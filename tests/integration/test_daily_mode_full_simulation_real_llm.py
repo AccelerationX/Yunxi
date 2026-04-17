@@ -184,6 +184,8 @@ async def test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish(
                     "感兴趣",
                     "我可以把",
                     "推荐",
+                    "？",
+                    "?",
                 ),
                 max_chars=120,
             ).assert_passed()
