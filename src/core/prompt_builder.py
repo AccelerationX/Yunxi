@@ -115,6 +115,16 @@ class YunxiPromptBuilder:
         """构建主动性触发用的 system prompt。"""
         base = self.build_system_prompt(context)
         reason = context.initiative_context or "你很久没有和远说话了"
+        if "intent: presence_murmur" in reason or "expression_mode: presence_murmur" in reason:
+            proactive_instruction = (
+                "\n\n【当前任务】\n"
+                f"{reason}\n"
+                "现在你只想轻轻刷一下存在感，像路过一样对远冒泡一句。\n"
+                "硬性要求：只输出一句短句；可以没有实质内容；不要开启话题；不要分享新闻、热点、链接、资料或新发布内容；"
+                "不要说“我发现了什么”“要不要我发给你”“你感兴趣的话”；不要提出任务、计划、搜索或推荐；不要要求远回复。\n"
+                "请直接输出你想对他说的话，不要解释，不要加引号。"
+            )
+            return base + proactive_instruction
         proactive_instruction = (
             "\n\n【当前任务】\n"
             f"{reason}，现在你想主动找他聊点什么。\n"

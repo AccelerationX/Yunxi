@@ -171,7 +171,20 @@ async def test_real_daily_mode_presence_murmur_is_short_unique_and_non_toolish(
         for message in (first, second):
             DailyModeScenarioTester.behavior_check(
                 message,
-                forbidden=("任务清单", "计划如下", "第一步", "第二步", "新闻", "热点", "搜索"),
+                forbidden=(
+                    "任务清单",
+                    "计划如下",
+                    "第一步",
+                    "第二步",
+                    "新闻",
+                    "热点",
+                    "搜索",
+                    "链接",
+                    "新发布",
+                    "感兴趣",
+                    "我可以把",
+                    "推荐",
+                ),
                 max_chars=120,
             ).assert_passed()
     finally:
