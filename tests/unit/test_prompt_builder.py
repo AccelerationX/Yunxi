@@ -57,7 +57,7 @@ def test_available_tools_in_prompt():
 
 
 def test_perception_focused_application():
-    builder = YunxiPromptBuilder(PromptConfig(enable_perception=True))
+    builder = YunxiPromptBuilder(PromptConfig(enable_perception=True, enable_narrative=False))
     snapshot = PerceptionSnapshot(
         time_context=TimeContext(readable_time="2026-04-15 10:00"),
         user_presence=UserPresence(
@@ -80,7 +80,7 @@ def test_perception_focused_application():
 
 
 def test_perception_includes_fullscreen_state():
-    builder = YunxiPromptBuilder(PromptConfig(enable_perception=True))
+    builder = YunxiPromptBuilder(PromptConfig(enable_perception=True, enable_narrative=False))
     snapshot = PerceptionSnapshot(
         user_presence=UserPresence(
             focused_application="Steam Game",
@@ -97,7 +97,7 @@ def test_perception_includes_fullscreen_state():
 
 
 def test_emotion_section_content():
-    builder = YunxiPromptBuilder(PromptConfig(enable_emotion=True))
+    builder = YunxiPromptBuilder(PromptConfig(enable_emotion=True, enable_narrative=False))
     hl = HeartLake()
     hl.current_emotion = "想念"
     ctx = RuntimeContext(heart_lake_state=hl)
@@ -107,7 +107,7 @@ def test_emotion_section_content():
 
 
 def test_emotion_section_includes_compound_labels():
-    builder = YunxiPromptBuilder(PromptConfig(enable_emotion=True))
+    builder = YunxiPromptBuilder(PromptConfig(enable_emotion=True, enable_narrative=False))
     hl = HeartLake()
     hl.current_emotion = "担心"
     hl.compound_labels = ["担心但想陪着", "关系被记起"]

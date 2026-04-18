@@ -7,6 +7,7 @@
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from core.narrative_context import NarrativeContext
 from core.persona.profile import YunxiPersonaProfile, load_persona_profile
 from core.persona.reaction_library import ReactionLibrary, load_reaction_library
 from domains.memory.relationship_profile import (
@@ -28,6 +29,7 @@ class PromptConfig:
     enable_reaction_guidance: bool = True
     enable_mode: bool = True
     enable_tools: bool = True
+    enable_narrative: bool = True
     max_memory_lines: int = 10
     max_perception_lines: int = 8
     max_failure_hints: int = 3
@@ -67,6 +69,12 @@ class YunxiPromptBuilder:
 
     def build_system_prompt(self, context: RuntimeContext) -> str:
         """根据运行时上下文构建 system prompt。"""
+        if self.config.enable_narrative:
+            return self._build_narrative_system_prompt(context)
+        return self._build_data_system_prompt(context)
+
+    def _build_data_system_prompt(self, context: RuntimeContext) -> str:
+        """数据版 system prompt（向后兼容）。"""
         sections: List[str] = []
 
         if self.config.enable_identity:
@@ -106,6 +114,71 @@ class YunxiPromptBuilder:
         if self.config.enable_mode:
             sections.append(self._build_mode_section(context))
 
+        if self.config.enable_tools and context.available_tools:
+            sections.append(self._build_tools_section(context))
+
+        return "\n\n".join(sections)
+
+    def _build_narrative_system_prompt(self, context: RuntimeContext) -> str:
+        """叙事版 system prompt：让 LLM 感受情境而非读取数据。"""
+        sections: List[str] = []
+
+        # 1. 身份与人格（保持不变）
+        if self.config.enable_identity:
+            sections.append(self._build_identity_section())
+
+        # 2. 叙事化关系感受
+        if self.config.enable_relationship:
+            sec = self._build_narrative_relationship_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 3. 叙事化心情
+        if self.config.enable_emotion:
+            sec = self._build_narrative_emotion_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 4. 叙事化观察
+        if self.config.enable_perception:
+            sec = self._build_narrative_perception_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 5. 内心独白（新增）
+        sec = self._build_inner_voice_section(context)
+        if sec:
+            sections.append(sec)
+
+        # 6. 反应参考
+        if self.config.enable_reaction_guidance:
+            sec = self._build_reaction_guidance_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 7. 记忆（保持原样，但叙事化包装）
+        if self.config.enable_memory:
+            sec = self._build_memory_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 8. 失败提示
+        if self.config.enable_failure_hints:
+            sec = self._build_failure_hints_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 9. 连续性
+        if self.config.enable_continuity:
+            sec = self._build_continuity_section(context)
+            if sec:
+                sections.append(sec)
+
+        # 10. 模式
+        if self.config.enable_mode:
+            sections.append(self._build_mode_section(context))
+
+        # 11. 工具
         if self.config.enable_tools and context.available_tools:
             sections.append(self._build_tools_section(context))
 
@@ -297,3 +370,28 @@ class YunxiPromptBuilder:
             f"{tools_desc}\n"
             f"只有在确实需要时才调用工具，不要为了用工具而用工具。"
         )
+
+    # ------------------------------------------------------------------
+    # 叙事化 Section Builder（v2 女友感核心）
+    # ------------------------------------------------------------------
+
+    def _build_narrative_emotion_section(self, context: RuntimeContext) -> str:
+        """叙事化情感 section：云汐此刻的心情故事。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_mood_section()
+
+    def _build_narrative_perception_section(self, context: RuntimeContext) -> str:
+        """叙事化感知 section：云汐观察到的事。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_perception_section()
+
+    def _build_narrative_relationship_section(self, context: RuntimeContext) -> str:
+        """叙事化关系 section：云汐对这段关系的感受。"""
+        nc = NarrativeContext.from_runtime(context)
+        profile_text = "\n".join(self.relationship_profile.build_prompt_lines())
+        return nc.build_relationship_section(profile_text)
+
+    def _build_inner_voice_section(self, context: RuntimeContext) -> str:
+        """云汐的内心独白。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_inner_voice_section()

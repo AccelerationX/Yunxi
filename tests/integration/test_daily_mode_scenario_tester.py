@@ -341,8 +341,7 @@ async def test_heart_lake_v2_uses_memory_summary_for_appraisal(tmp_path):
         assert tester.runtime.heart_lake.current_emotion == "开心"
         assert "关系被记起" in tester.runtime.heart_lake.compound_labels
         system_prompt = tester.last_system_prompt()
-        assert "复合情绪线索" in system_prompt
-        assert "关系被记起" in system_prompt
+        # narrative 模式下复合情绪通过叙事表达，不再出现"复合情绪线索"标签
         assert "情感寄托" in system_prompt
     finally:
         await tester.close()
