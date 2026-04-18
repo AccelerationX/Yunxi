@@ -131,7 +131,19 @@
 
 ### 下一步
 
-设计文档同步（`PROMPT_BUILDER_DESIGN.md`、`HEART_LAKE_DESIGN.md`），然后准备 v2 封板。
+进入 v2 打磨阶段。已完成代码审查和优化路线图（`docs/design/DAILY_MODE_V2_OPTIMIZATION_ROADMAP.md`）。
+
+高优先级待修复：
+1. HeartLake 恢复逻辑与语义情绪冲突（感知 tick 抹掉语义评估结果）
+2. InitiativeEngine 未读取 compound_labels 和 appraisal_reason
+3. 情绪标签在感知 tick 中被静默覆盖
+
+中优先级：
+4. Narrative 模式补全（memory/failure_hints/continuity 叙事化）
+5. 硬编码阈值配置化
+6. relationship_level 从静态变为动态
+
+详见路线图文档。
 
 ---
 
