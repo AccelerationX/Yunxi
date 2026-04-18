@@ -17,8 +17,27 @@ if TYPE_CHECKING:
     from domains.perception.coordinator import PerceptionEvent, PerceptionSnapshot
 
 
-DEFAULT_DAILY_PROACTIVE_BUDGET = 5
-TRIGGER_THRESHOLD = 0.55
+from core.config.daily_mode import (
+    DEFAULT_DAILY_PROACTIVE_BUDGET,
+    INITIATIVE_COOLDOWN_SECONDS,
+    INITIATIVE_MISS_HIGH_THRESHOLD,
+    INITIATIVE_MISS_MEDIUM_THRESHOLD,
+    INITIATIVE_SCORE_APP_CHANGED,
+    INITIATIVE_SCORE_JEALOUS,
+    INITIATIVE_SCORE_LONG_IDLE,
+    INITIATIVE_SCORE_MISS,
+    INITIATIVE_SCORE_MISS_HIGH,
+    INITIATIVE_SCORE_MISS_MEDIUM,
+    INITIATIVE_SCORE_USER_RETURNED,
+    INITIATIVE_SCORE_WORRIED,
+    INITIATIVE_TRIGGER_THRESHOLD,
+    INITIATIVE_UNANSWERED_CAP,
+    PRESENCE_MURMUR_FULLSCREEN_PENALTY,
+    PRESENCE_MURMUR_HIGH_INPUT_PENALTY,
+    PRESENCE_MURMUR_INTIMACY_WARMTH_MIN,
+    PRESENCE_MURMUR_PLAYFULNESS_MIN,
+    PRESENCE_MURMUR_VULNERABILITY_MAX,
+)
 
 
 @dataclass
@@ -41,7 +60,7 @@ class InitiativeEngine:
 
     def __init__(
         self,
-        cooldown_seconds: float = 300.0,
+        cooldown_seconds: float = INITIATIVE_COOLDOWN_SECONDS,
         daily_budget: int = DEFAULT_DAILY_PROACTIVE_BUDGET,
     ):
         self.cooldown_seconds = cooldown_seconds
@@ -67,7 +86,7 @@ class InitiativeEngine:
                 suppression_reason="cooldown",
             )
 
-        if unanswered_proactive_count >= 3:
+        if unanswered_proactive_count >= INITIATIVE_UNANSWERED_CAP:
             return InitiativeDecision(
                 trigger=False,
                 reason="已连续主动 3 次未获回复，进入冷静期",
@@ -123,19 +142,19 @@ class InitiativeEngine:
         required_tags: tuple[str, ...] = ()
 
         if "user_returned" in event_types and heart_lake.miss_value > 50:
-            score += 0.55
+            score += INITIATIVE_SCORE_USER_RETURNED
             reasons.append("远刚回到电脑前，想念值也偏高")
             intent = "welcome_back"
             expression_mode = "warm_reunion"
             preferred_layers = ("mixed", "shared_interest")
         elif "long_idle" in event_types and heart_lake.miss_value >= 60:
-            score += 0.35
+            score += INITIATIVE_SCORE_LONG_IDLE
             reasons.append("远离开了一段时间，云汐有点想念")
             intent = "miss_after_idle"
             expression_mode = "soft_checkin"
 
         if "late_night" in event_types:
-            score += 0.20
+            score += INITIATIVE_SCORE_APP_CHANGED
             reasons.append("现在已经偏晚")
             required_tags = ("深夜", "关心")
 
@@ -144,19 +163,36 @@ class InitiativeEngine:
         playfulness = float(getattr(heart_lake, "playfulness", 45.0))
         vulnerability = float(getattr(heart_lake, "vulnerability", 20.0))
         intimacy_warmth = float(getattr(heart_lake, "intimacy_warmth", 60.0))
+        compound_labels = getattr(heart_lake, "compound_labels", [])
+        appraisal_reason = getattr(heart_lake, "last_appraisal_reason", "")
+
+        # compound_labels 影响主动意愿
+        if compound_labels:
+            compound_text = " ".join(compound_labels)
+            if "委屈" in compound_text or "脆弱" in compound_text:
+                score -= 0.15
+                reasons.append("云汐还有点委屈，不太想打扰")
+            if "刚从" in compound_text:
+                score -= 0.10
+                reasons.append("云汐情绪刚转变，先克制一下")
+
+        # 最近语义评估原因影响意图
+        if appraisal_reason:
+            reasons.append(f"（刚才：{appraisal_reason}）")
+
         if emotion == "担心":
-            score += 0.45
+            score += INITIATIVE_SCORE_WORRIED
             reasons.append("云汐正在担心远")
             intent = "care"
             expression_mode = "gentle_care"
             required_tags = ("关心",)
         elif emotion == "想念":
-            score += 0.30
+            score += INITIATIVE_SCORE_MISS
             reasons.append("云汐正在想念远")
             intent = "missing"
             expression_mode = "soft_missing"
         elif emotion == "吃醋":
-            score += 0.25
+            score += INITIATIVE_SCORE_JEALOUS
             reasons.append("云汐有一点吃醋")
             intent = "affectionate_jealousy"
             expression_mode = "light_jealousy"
@@ -174,7 +210,10 @@ class InitiativeEngine:
             activity_state in {"leisure", "idle"}
             and unanswered_proactive_count == 0
             and vulnerability < 55
-            and (playfulness >= 55 or intimacy_warmth >= 66)
+            and (
+                playfulness >= PRESENCE_MURMUR_PLAYFULNESS_MIN
+                or intimacy_warmth >= PRESENCE_MURMUR_INTIMACY_WARMTH_MIN
+            )
         ):
             presence_available = True
             presence_suppression_reason = ""
@@ -229,7 +268,7 @@ class InitiativeEngine:
 
         score += self._presence_score(perception_snapshot, reasons)
 
-        if score < TRIGGER_THRESHOLD:
+        if score < INITIATIVE_TRIGGER_THRESHOLD:
             return InitiativeDecision(
                 trigger=False,
                 reason="; ".join(reasons) or "暂无主动触发必要",

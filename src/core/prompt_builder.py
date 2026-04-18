@@ -30,6 +30,7 @@ class PromptConfig:
     enable_mode: bool = True
     enable_tools: bool = True
     enable_narrative: bool = True
+    enable_inner_voice: bool = True
     max_memory_lines: int = 10
     max_perception_lines: int = 8
     max_failure_hints: int = 3
@@ -145,10 +146,11 @@ class YunxiPromptBuilder:
             if sec:
                 sections.append(sec)
 
-        # 5. 内心独白（新增）
-        sec = self._build_inner_voice_section(context)
-        if sec:
-            sections.append(sec)
+        # 5. 内心独白（可选）
+        if self.config.enable_inner_voice:
+            sec = self._build_inner_voice_section(context)
+            if sec:
+                sections.append(sec)
 
         # 6. 反应参考
         if self.config.enable_reaction_guidance:
@@ -156,21 +158,21 @@ class YunxiPromptBuilder:
             if sec:
                 sections.append(sec)
 
-        # 7. 记忆（保持原样，但叙事化包装）
+        # 7. 记忆（叙事化版本）
         if self.config.enable_memory:
-            sec = self._build_memory_section(context)
+            sec = self._build_narrative_memory_section(context)
             if sec:
                 sections.append(sec)
 
-        # 8. 失败提示
+        # 8. 失败提示（叙事化版本）
         if self.config.enable_failure_hints:
-            sec = self._build_failure_hints_section(context)
+            sec = self._build_narrative_failure_hints_section(context)
             if sec:
                 sections.append(sec)
 
-        # 9. 连续性
+        # 9. 连续性（叙事化版本）
         if self.config.enable_continuity:
-            sec = self._build_continuity_section(context)
+            sec = self._build_narrative_continuity_section(context)
             if sec:
                 sections.append(sec)
 
@@ -341,15 +343,58 @@ class YunxiPromptBuilder:
             return ""
         return f"【你们共同的记忆】\n{context.memory_summary}"
 
+    def _build_narrative_memory_section(self, context: RuntimeContext) -> str:
+        """叙事化记忆 section：用第一人称回忆口吻包装。"""
+        if not context.memory_summary:
+            return ""
+        lines = context.memory_summary.strip().split("\n")
+        wrapped = []
+        for line in lines[: self.config.max_memory_lines]:
+            line = line.strip()
+            if not line:
+                continue
+            # 简单叙事化包装
+            if line.startswith("-"):
+                content = line[1:].strip()
+                wrapped.append(f"你还记得，{content}")
+            else:
+                wrapped.append(f"你记得：{line}")
+        if not wrapped:
+            return ""
+        return "【云汐的记忆】\n" + "\n".join(wrapped)
+
     def _build_failure_hints_section(self, context: RuntimeContext) -> str:
         if not context.failure_hints:
             return ""
         return f"【历史经验提醒】\n{context.failure_hints}"
 
+    def _build_narrative_failure_hints_section(self, context: RuntimeContext) -> str:
+        """叙事化失败提醒：用经验口吻包装。"""
+        if not context.failure_hints:
+            return ""
+        lines = context.failure_hints.strip().split("\n")
+        wrapped = []
+        for line in lines[: self.config.max_failure_hints]:
+            line = line.strip()
+            if not line:
+                continue
+            wrapped.append(f"上次在这个场景下，你曾提醒自己：{line}")
+        if not wrapped:
+            return ""
+        return "【云汐的经验】\n" + "\n".join(wrapped)
+
     def _build_continuity_section(self, context: RuntimeContext) -> str:
         if not context.continuity_summary:
             return ""
         return f"【你们最近的连续性】\n{context.continuity_summary}"
+
+    def _build_narrative_continuity_section(self, context: RuntimeContext) -> str:
+        """叙事化连续性：用等待/惦记口吻包装。"""
+        if not context.continuity_summary:
+            return ""
+        summary = context.continuity_summary.strip()
+        # 简单包装为内心独白式
+        return f"【云汐的惦记】\n远还没回复你上次的{summary}，你一直惦记着。"
 
     def _build_mode_section(self, context: RuntimeContext) -> str:
         if context.mode == "factory":

@@ -22,7 +22,7 @@ def test_failure_hints_in_prompt():
     builder = YunxiPromptBuilder(PromptConfig(enable_failure_hints=True))
     ctx = RuntimeContext(failure_hints="截图工具在暗色模式下容易失效，注意对比度。")
     prompt = builder.build_system_prompt(ctx)
-    assert "历史经验提醒" in prompt
+    assert "云汐的经验" in prompt
     assert "暗色模式" in prompt
 
 
@@ -30,7 +30,7 @@ def test_failure_hints_disabled():
     builder = YunxiPromptBuilder(PromptConfig(enable_failure_hints=False))
     ctx = RuntimeContext(failure_hints="截图工具在暗色模式下容易失效。")
     prompt = builder.build_system_prompt(ctx)
-    assert "历史经验提醒" not in prompt
+    assert "云汐的经验" not in prompt
 
 
 def test_continuity_summary_in_prompt():

@@ -7,6 +7,28 @@
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from core.config.daily_mode import (
+    EMOTION_COOLDOWN_SECONDS,
+    EMOTION_INERTIA,
+    EMOTION_PERSISTENCE_SECONDS,
+    PERCEPTION_MISS_ACTIVE_RATE,
+    PERCEPTION_MISS_AWAY_RATE,
+    PERCEPTION_MISS_DEFAULT_RATE,
+    PERCEPTION_MISS_GAME_RATE,
+    PERCEPTION_MISS_IDLE_RATE,
+    PERCEPTION_MISS_WORK_RATE,
+    PERCEPTION_PLAYFULNESS_GAME_RATE,
+    PERCEPTION_SECURITY_ACTIVE_APART_RATE,
+    PERCEPTION_SECURITY_ACTIVE_TOGETHER_RATE,
+    PERCEPTION_SECURITY_AWAY_RATE,
+    PERCEPTION_SECURITY_DEFAULT_RATE,
+    PERCEPTION_SECURITY_WORK_RATE,
+    PERCEPTION_TENDERNESS_WORK_NIGHT_RATE,
+    PERCEPTION_VULNERABILITY_AWAY_LOW_SEC_RATE,
+    RECOVERY_HALF_LIFE_SECONDS,
+    SEMANTIC_APPRAISAL_PROTECT_SECONDS,
+)
+
 if TYPE_CHECKING:
     from domains.perception.coordinator import PerceptionEvent, PerceptionSnapshot
 
@@ -35,8 +57,8 @@ class HeartLake:
         # 情绪动力学 v2
         self._last_emotion: str = "平静"
         self._last_emotion_change_at: float = 0.0
-        self.emotion_inertia: float = 0.7  # delta 应用系数（0.7 = 渐进变化）
-        self.emotion_persistence_seconds: float = 30.0  # 情绪标签持续影响时间
+        self.emotion_inertia: float = EMOTION_INERTIA
+        self.emotion_persistence_seconds: float = EMOTION_PERSISTENCE_SECONDS
         self._recovery_targets: Dict[str, float] = {
             "valence": 0.0,
             "arousal": 0.0,
@@ -88,49 +110,58 @@ class HeartLake:
         is_fullscreen = getattr(snapshot.user_presence, "is_fullscreen", False)
         input_rate = getattr(snapshot.user_presence, "input_events_per_minute", 0)
 
-        self.apply_natural_recovery(elapsed_seconds)
+        # 如果最近有语义评估（< 120s），保护情绪标签不被 recovery 抹掉
+        now = time.time()
+        protect_label = (now - self._last_semantic_appraisal_at) < SEMANTIC_APPRAISAL_PROTECT_SECONDS
+        self.apply_natural_recovery(elapsed_seconds, protect_emotion_label=protect_label)
 
         # === 想念值动态（v2：activity_state  aware）===
         if activity_state == "away":
             # 远离开了：想念加速上升
-            self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 30.0)
+            self.miss_value = min(100.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_AWAY_RATE)
         elif activity_state == "idle" and idle >= 300:
             # 长时间 idle：想念正常上升
-            self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 60.0)
+            self.miss_value = min(100.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_IDLE_RATE)
         elif activity_state == "work" and is_fullscreen and input_rate >= 10:
             # 专注工作：想念几乎不升（知道他忙，默默陪着就好）
-            self.miss_value = max(0.0, self.miss_value - elapsed_seconds / 120.0)
+            self.miss_value = max(0.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_WORK_RATE)
         elif activity_state == "game":
             # 打游戏：想念微升（想参与但尊重）
-            self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 90.0)
+            self.miss_value = min(100.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_GAME_RATE)
         elif idle < 60:
             # 活跃互动中：想念下降
-            self.miss_value = max(0.0, self.miss_value - elapsed_seconds / 30.0)
+            self.miss_value = max(0.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_ACTIVE_RATE)
+        else:
+            # 其他状态（如 work+fullscreen+低输入）：想念自然缓慢下降
+            self.miss_value = max(0.0, self.miss_value + elapsed_seconds * PERCEPTION_MISS_DEFAULT_RATE)
 
         # === 安全感动态（v2：activity_state aware）===
         if activity_state == "away":
             # 长时间不在：不确定感上升
-            self.security = max(0.0, self.security - elapsed_seconds / 60.0)
+            self.security = max(0.0, self.security + elapsed_seconds * PERCEPTION_SECURITY_AWAY_RATE)
         elif activity_state == "work" and is_fullscreen:
             # 专注工作：安全感微升（知道他没乱跑，安心）
-            self.security = min(100.0, self.security + elapsed_seconds / 180.0)
+            self.security = min(100.0, self.security + elapsed_seconds * PERCEPTION_SECURITY_WORK_RATE)
         elif idle < 60 and (activity_state in ("work", "game", "leisure")):
             # 活跃但不在和云汐聊天：轻微不安
-            self.security = max(0.0, self.security - elapsed_seconds / 120.0)
+            self.security = max(0.0, self.security + elapsed_seconds * PERCEPTION_SECURITY_ACTIVE_APART_RATE)
         elif idle < 60:
             # 活跃且在和云汐互动：安全感上升
-            self.security = min(100.0, self.security + elapsed_seconds / 60.0)
+            self.security = min(100.0, self.security + elapsed_seconds * PERCEPTION_SECURITY_ACTIVE_TOGETHER_RATE)
+        else:
+            # 其他状态：安全感自然缓慢恢复
+            self.security = min(100.0, self.security + elapsed_seconds * PERCEPTION_SECURITY_DEFAULT_RATE)
 
         # === 其他维度动态（v2 新增）===
         if activity_state == "work" and (hour >= 22 or hour < 6):
             # 深夜还在工作：心疼感上升
-            self.tenderness = min(100.0, self.tenderness + elapsed_seconds / 120.0)
+            self.tenderness = min(100.0, self.tenderness + elapsed_seconds * PERCEPTION_TENDERNESS_WORK_NIGHT_RATE)
         if activity_state == "game" and is_fullscreen:
             # 沉浸游戏：俏皮感上升（想调皮戳他）
-            self.playfulness = min(100.0, self.playfulness + elapsed_seconds / 120.0)
+            self.playfulness = min(100.0, self.playfulness + elapsed_seconds * PERCEPTION_PLAYFULNESS_GAME_RATE)
         if activity_state == "away" and self.security < 50:
             # 离开且不安：脆弱感明显上升
-            self.vulnerability = min(100.0, self.vulnerability + elapsed_seconds / 60.0)
+            self.vulnerability = min(100.0, self.vulnerability + elapsed_seconds * PERCEPTION_VULNERABILITY_AWAY_LOW_SEC_RATE)
 
         # === 事件驱动的情感切换（v2 增强）===
         event_types = {e.event_type for e in events}
@@ -191,7 +222,7 @@ class HeartLake:
         compound_labels: Optional[List[str]] = None,
         reason: str = "",
         confidence: float = 1.0,
-        cooldown_seconds: float = 90.0,
+        cooldown_seconds: float = EMOTION_COOLDOWN_SECONDS,
     ) -> None:
         """Apply semantic emotion-appraisal deltas with bounded dynamics.
 
@@ -249,13 +280,24 @@ class HeartLake:
             self.last_appraisal_reason = reason
         self._last_semantic_appraisal_at = now
 
-    def apply_natural_recovery(self, elapsed_seconds: float = 60.0) -> None:
-        """Move volatile emotion dimensions slowly back to their baseline."""
+    def apply_natural_recovery(
+        self,
+        elapsed_seconds: float = 60.0,
+        *,
+        protect_emotion_label: bool = False,
+    ) -> None:
+        """Move volatile emotion dimensions slowly back to their baseline.
+
+        Args:
+            protect_emotion_label: When True, do not transition current_emotion
+                back to "平静" even if dimension thresholds suggest recovery.
+                Used after semantic appraisals to preserve LLM-understood mood.
+        """
         elapsed = max(0.0, float(elapsed_seconds))
         if elapsed <= 0:
             return
         # About 12 minutes to cover half the distance to baseline for most dimensions.
-        fraction = min(0.35, elapsed / 720.0)
+        fraction = min(0.35, elapsed / RECOVERY_HALF_LIFE_SECONDS)
         for key, target in self._recovery_targets.items():
             current = getattr(self, key, None)
             if not isinstance(current, (int, float)):
@@ -267,6 +309,9 @@ class HeartLake:
                 setattr(self, key, _clamp(next_value, -100.0, 100.0))
             else:
                 setattr(self, key, _clamp(next_value, 0.0, 100.0))
+
+        if protect_emotion_label:
+            return
 
         if self.vulnerability <= 24 and self.current_emotion == "委屈":
             self.current_emotion = "平静"

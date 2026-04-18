@@ -10,6 +10,8 @@ import os
 import time
 from typing import Any, Optional
 
+from core.config.daily_mode import PRESENCE_MURMUR_MAX_LENGTH
+
 from core.cognition.heart_lake.core import HeartLake
 from core.cognition.heart_lake.updater import HeartLakeUpdater
 from core.cognition.initiative_engine import InitiativeDecision, InitiativeEngine
@@ -256,7 +258,7 @@ class YunxiRuntime:
         text = " ".join((content or "").strip().split())
         if not text:
             return False
-        if len(text) > 80:
+        if len(text) > PRESENCE_MURMUR_MAX_LENGTH:
             return False
         forbidden_tokens = (
             "新闻",
