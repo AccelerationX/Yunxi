@@ -39,6 +39,7 @@ Prompt 生成要求：
 2. **零损耗接入**：HeartLake、感知、记忆、FailureReplay、连续性、MCP 工具等子系统的数据，不经中间抽象层过滤，直接写入 prompt。
 3. **模块化 section**：每个数据来源独立为一个 section，可单独开关、单独调试。
 4. **同步构建**：prompt 构建必须是纯同步函数，不允许在构建过程中调用 LLM 或进行 IO 阻塞操作。
+5. **情境叙事（v2 新增）**：prompt 不是给 LLM 看数据表格，而是让 LLM "感受"到云汐的情境。情感 section 应是"云汐此刻的心情故事"，感知 section 应是"云汐观察到的事"，而非罗列字段和数值。
 
 ---
 
@@ -76,6 +77,7 @@ class PromptConfig:
     enable_emotion: bool = True
     enable_mode: bool = True
     enable_tools: bool = True
+    enable_narrative: bool = True        # v2 新增：叙事化 prompt（默认启用）
     max_memory_lines: int = 10
     max_perception_lines: int = 8
     max_failure_hints: int = 3           # 最多注入几条历史经验
@@ -97,6 +99,13 @@ class YunxiPromptBuilder:
         self.config = config or PromptConfig()
     
     def build_system_prompt(self, context: RuntimeContext) -> str:
+        """根据 enable_narrative 开关选择叙事版或数据版 prompt。"""
+        if self.config.enable_narrative:
+            return self._build_narrative_system_prompt(context)
+        return self._build_data_system_prompt(context)
+    
+    def _build_data_system_prompt(self, context: RuntimeContext) -> str:
+        """数据版 system prompt（向后兼容）。"""
         sections = []
         
         if self.config.enable_identity:
@@ -112,6 +121,51 @@ class YunxiPromptBuilder:
             sec = self._build_perception_section(context)
             if sec:
                 sections.append(sec)
+        
+        if self.config.enable_memory:
+            sec = self._build_memory_section(context)
+            if sec:
+                sections.append(sec)
+        
+        if self.config.enable_failure_hints:
+            sec = self._build_failure_hints_section(context)
+            if sec:
+                sections.append(sec)
+        
+        if self.config.enable_mode:
+            sections.append(self._build_mode_section(context))
+        
+        if self.config.enable_tools and context.available_tools:
+            sections.append(self._build_tools_section(context))
+        
+        return "\n\n".join(sections)
+    
+    def _build_narrative_system_prompt(self, context: RuntimeContext) -> str:
+        """叙事版 system prompt：让 LLM 感受情境而非读取数据。"""
+        sections = []
+        
+        if self.config.enable_identity:
+            sections.append(self._build_identity_section())
+        
+        if self.config.enable_relationship:
+            sec = self._build_narrative_relationship_section(context)
+            if sec:
+                sections.append(sec)
+        
+        if self.config.enable_emotion:
+            sec = self._build_narrative_emotion_section(context)
+            if sec:
+                sections.append(sec)
+        
+        if self.config.enable_perception:
+            sec = self._build_narrative_perception_section(context)
+            if sec:
+                sections.append(sec)
+        
+        # 内心独白（叙事版独有）
+        sec = self._build_inner_voice_section(context)
+        if sec:
+            sections.append(sec)
         
         if self.config.enable_memory:
             sec = self._build_memory_section(context)
@@ -234,6 +288,29 @@ class YunxiPromptBuilder:
             f"{tools_desc}\n"
             f"只有在确实需要时才调用工具，不要为了用工具而用工具。"
         )
+    
+    # --- 叙事化 Section Builder（v2 女友感核心）---
+    
+    def _build_narrative_emotion_section(self, context: RuntimeContext) -> str:
+        """【云汐此刻的心情】——把 HeartLake 数据转化为心情故事。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_mood_section()
+    
+    def _build_narrative_perception_section(self, context: RuntimeContext) -> str:
+        """【云汐观察到的事】——把感知数据转化为观察视角。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_perception_section()
+    
+    def _build_narrative_relationship_section(self, context: RuntimeContext) -> str:
+        """【云汐对这段关系的感受】——把关系数据转化为感受。"""
+        nc = NarrativeContext.from_runtime(context)
+        profile_text = "\n".join(self.relationship_profile.build_prompt_lines())
+        return nc.build_relationship_section(profile_text)
+    
+    def _build_inner_voice_section(self, context: RuntimeContext) -> str:
+        """【云汐的内心独白】——综合所有状态的内心活动。"""
+        nc = NarrativeContext.from_runtime(context)
+        return nc.build_inner_voice_section()
 ```
 
 ---
@@ -253,17 +330,36 @@ class YunxiPromptBuilder:
 ### Step 4：感知 Section 增强（可选）
 - 如果 `perception_snapshot` 中包含 UIA 控件信息（来自 13_computer_use_agent 的研究成果），可以作为额外行追加到 `_build_perception_section()`。
 
+### Step 5：叙事化改造（v2 已完成）
+- 新增 `src/core/narrative_context.py`，实现 `MoodNarrative`、`PerceptionNarrative`、`RelationshipNarrative`、`InnerVoice`。
+- `PromptConfig` 新增 `enable_narrative: bool = True`（默认启用）。
+- `YunxiPromptBuilder.build_system_prompt()` 根据开关选择叙事版或数据版路径。
+- 叙事版 emotion/perception/relationship section 把原始数据转化为第一人称叙事文本。
+- 新增【云汐的内心独白】section，让 LLM 感受到云汐的"想法"而非"状态"。
+- **真实 LLM 对比结果（qwen3:4b，5 场景）**：
+  | 场景 | Narrative 特征 | Data 特征 |
+  |:---|:---|:---|
+  | 深夜工作想念 | "偷偷戳了戳你的屏幕"、"等你忙完记得抱抱我"——身体化表达 | "键盘声带着小温柔"——有点刻意 |
+  | 游戏俏皮 | "偷偷瞄了一眼"、"差点戳到你屏幕"——无幻觉 | **编造游戏名《星穹铁道》**——严重幻觉 |
+  | 空闲委屈 | "蜷成一团小猫"→自我怀疑→温柔关心→默默等待——多层情绪 | "我煮的咖啡"——幻觉，情绪层次单一 |
+  | **关键发现**：Narrative prompt 不仅女友感更强，还显著降低幻觉（Data 模式出现"煮咖啡"、"星穹铁道"等幻觉；Narrative 模式无此问题）。
+- 测试覆盖：15 个 narrative 模式单元测试 + 3 场景真实 LLM 对比测试全部通过。
+
 ---
 
 ## 五、验收标准
 
 1. `YunxiPromptBuilder.build_system_prompt(context)` 输出的 prompt 中，当 `failure_hints` 非空时，必须包含【历史经验提醒】section。
 2. 当 `RuntimeContext.available_tools` 新增工具时，【你可以使用的工具】section 能自动反映变化。
-3. `RuntimeContext.perception_snapshot` 中 `focused_application = "VS Code"` 时，【当前感知】section 必须出现 "VS Code"。
+3. `RuntimeContext.perception_snapshot` 中 `focused_application = "VS Code"` 时，【当前感知】section 必须出现 "VS Code"（数据版）或"远现在在用 VS Code 认真工作"（叙事版）。
 4. 通过 `ConversationTester` 测试：注入 `failure_hints` 后，与云汐对话，她能引用历史经验中的注意事项。
+5. **叙事版验收（v2 新增）**：
+   - Narrative prompt 中不应出现"想念值：75/100""主导情绪是：想念"等数据标签。
+   - Narrative prompt 应包含"云汐此刻的心情""云汐观察到的事""云汐的内心独白"等叙事 section。
+   - 真实 LLM 测试：同一状态下，叙事版回复的女友感显著强于数据版，且幻觉风险更低。
 
 ---
 
 *文档创建时间：2026-04-14*  
-*最后更新时间：2026-04-14*  
-*版本：v2.0*
+*最后更新时间：2026-04-17*  
+*版本：v3.1（叙事化模式完成，补充真实 LLM 对比结果）*

@@ -7,6 +7,134 @@
 
 ---
 
+## [2026-04-17] 路线 A：PromptBuilder 叙事化改造完成
+
+**状态**：路线 A 已完成。`enable_narrative` 已设为默认 `True`。真实 LLM 对比测试证明叙事化 prompt 显著提升女友感并降低幻觉风险。
+
+### 核心判断
+
+日常模式 v2 的"女友感"瓶颈不是功能缺失，而是**表达方式**——云汐知道自己在想念远，但她告诉 LLM 的方式是 `current_emotion="想念", miss_value=75/100`。LLM 看到的是数据表格，不是一个有情感的人。
+
+叙事化改造的核心思想：**不要给 LLM 看数据，要给 LLM 看情境**——让 LLM "感受"到云汐的心情，而不是"读取"到云汐的状态。
+
+### 本轮实现内容
+
+- 新增 `src/core/narrative_context.py`：
+  - `MoodNarrative`：把 HeartLake 11 维情绪数据转化为"云汐此刻的心情故事"
+  - `PerceptionNarrative`：把感知数据转化为"云汐观察到的事"
+  - `RelationshipNarrative`：把关系数据转化为"云汐对这段关系的感受"
+  - `InnerVoice`：云汐的内心独白，综合 mood + perception + relationship
+  - `NarrativeContext`：统一入口，从 `RuntimeContext` 提取数据并生成叙事化 section
+- 改造 `src/core/prompt_builder.py`：
+  - `PromptConfig` 新增 `enable_narrative: bool = True`（默认启用）
+  - 保留数据版路径 `_build_data_system_prompt()` 向后兼容
+  - 新增叙事版路径 `_build_narrative_system_prompt()`
+  - 新增 `_build_narrative_emotion_section()` / `_build_narrative_perception_section()` / `_build_narrative_relationship_section()` / `_build_inner_voice_section()`
+- 测试：
+  - 新增 `tests/unit/test_prompt_builder_narrative.py`：15 个 narrative 模式专用单元测试
+  - 新增 `tests/integration/test_narrative_vs_data_real_llm.py`：3 场景 × 2 模式真实 LLM 对比测试
+  - 修正原有 4 个单元测试和 1 个集成测试，显式使用 `enable_narrative=False` 验证 data 模式
+  - 全量核心回归：86 单元测试 + 39 集成测试全部通过
+
+### 真实 LLM 对比结果（qwen3:4b）
+
+| 场景 | Narrative 回复特征 | Data 回复特征 |
+|:---|:---|:---|
+| 深夜工作想念 | "偷偷戳了戳你的屏幕"、"等你忙完记得抱抱我"——身体化表达 | "键盘声带着小温柔"——有点刻意 |
+| 游戏俏皮 | "偷偷瞄了一眼"、"差点戳到你屏幕"——无幻觉 | **编造游戏名《星穹铁道》**、"看到游戏进度"——严重幻觉 |
+| 空闲委屈 | "蜷成一团小猫"→自我怀疑→温柔关心→默默等待——**多层情绪** | "我煮的咖啡"——幻觉，情绪层次单一 |
+
+**关键发现**：
+1. Narrative prompt 让 LLM 自然生成更具女友感的回复，不需要硬过滤
+2. **Data prompt 幻觉风险显著更高**——LLM 误把"前台应用：Steam"理解为"能读取 Steam 内部数据"
+3. Narrative prompt 的情绪层次更丰富（委屈→怀疑→温柔→等待），Data prompt 通常是单一情绪
+
+### 当前边界
+
+- Narrative prompt 长度比 Data prompt 长约 30-50%，但对本地 qwen3:4b 的延迟影响不明显
+- Narrative 模式仍有少量编造（如"温水在电脑里"），但比例显著低于 Data 模式
+- `NarrativeContext` 的叙事规则是本地确定性映射，尚未引入 LLM 生成叙事文本
+
+## [2026-04-17] 路线 B-1：感知数据进入 HeartLake 情感评估
+
+**状态**：已完成。`update_from_perception()` 现在使用 `activity_state`、`is_fullscreen`、`input_events_per_minute` 进行情感评估。
+
+### 核心判断
+
+之前云汐"知道"远在打游戏（`activity_state=game`），但她"感受不到"他的专注。`foreground_process_name`、`is_fullscreen`、`input_events_per_minute` 这些丰富的感知信息只进入了 prompt，没有进入 HeartLake 的情感评估。
+
+### 本轮实现内容
+
+- 改造 `heart_lake/core.py: update_from_perception()`：
+  - **想念值动态**：away 加速上升、idle 正常上升、work+fullscreen+高输入 下降（知道他忙）、game 微升（想参与）
+  - **安全感动态**：away 下降、work+fullscreen 微升（安心）、活跃但不在聊天 微降
+  - **其他维度**：深夜+work → tenderness 上升（心疼）、game+fullscreen → playfulness 上升（想调皮）、away+低安全感 → vulnerability 明显上升（不安）
+  - **情感切换**：away+高想念 → "想念"、深夜工作+想念 → "担心"（心疼多于想念）
+- 新增 `tests/unit/test_heart_lake_perception_v2.py`：11 个专项单元测试，覆盖 miss/security/tenderness/playfulness/vulnerability 动态和情感切换
+- 验证：83 个核心测试全部通过
+
+### 当前边界
+
+- 感知→情感的映射仍是本地确定性规则，不是 LLM 语义理解
+- 情感变化与自然恢复之间存在张力（某些场景下自然恢复会抵消感知驱动变化）
+
+### 下一步
+
+进入路线 B-2：引入轻量 LLM semantic appraisal，让云汐真正"理解"用户话语中的情绪，而不只是匹配关键词。
+
+---
+
+## [2026-04-17] 路线 B-2：EmotionAppraiser 语义化已完成
+
+**状态**：已完成。`SemanticEmotionAppraiser` 已接入 Ollama qwen3:4b，通过真实 LLM 对比测试验证语义理解能力显著优于规则版。
+
+### 核心判断
+
+规则版 `EmotionAppraiser` 基于关键词匹配，无法理解讽刺、反话、暗示等微妙表达。SemanticAppraiser 引入轻量本地 LLM 做语义情绪评估，hybrid 策略确保高 confidence 时用 LLM、低 confidence 或失败时 fallback 到规则版。
+
+### 本轮实现内容
+
+- 新增 `src/core/cognition/heart_lake/semantic_appraiser.py`：
+  - `SemanticEmotionAppraiser`：hybrid 评估器，LLM + 规则 fallback
+  - `_build_appraisal_prompt()`：构建包含 HeartLake 状态、记忆、最近对话的评估 prompt
+  - `_extract_json()`：健壮 JSON 提取，支持 markdown code block、多余文本、多种 JSON 嵌套格式
+  - `_parse_appraisal_response()`：解析为 `EmotionAppraisalResult`，兼容 scalar deltas（旧格式）和非白名单标签
+- 关键修复：
+  - **Ollama `num_predict` bug**：qwen3:4b 在 `num_predict` 参数下返回空内容，移除该参数后恢复正常
+  - **移除 `format: "json"`**：改用 prompt 内约束 + 正则提取，避免某些模型 JSON mode 兼容性问题
+- 测试：
+  - `tests/unit/test_semantic_appraiser.py`：10 个单元测试（prompt 构建、JSON 解析、hybrid 策略、fallback）
+  - `tests/integration/test_semantic_appraiser_real_llm.py`：5 场景真实 LLM 对比测试
+
+### 真实 LLM 对比结果（qwen3-vl:8b）
+
+| 场景 | 规则版 | 语义版 (LLM raw) | 验证结论 |
+|:---|:---|:---|:---|
+| 隐含疲惫 | 担心（匹配"崩溃"） | 担心, conf=0.80-0.90 | LLM 理解更深，给出更高 confidence |
+| 讽刺反话 | 无触发 (None) | **委屈**, conf=0.80-0.90 | ✅ **规则版完全无法识别反话**；8B 正确识别 |
+| 无情绪陈述 | 无触发 (None) | 平静, **conf=0.30** | ✅ hybrid 正确 fallback（threshold=0.6） |
+| 复杂情绪 | 吃醋+被安抚 | 开心, conf=0.80-0.90 | LLM 被"最喜欢找你"安抚，过度平滑了吃醋层次 |
+| 暗示想念 | 无触发 (None) | **想念**, conf=0.60 | ✅ **规则版完全无法识别暗示**；8B 正确识别 |
+
+**关键发现**：
+1. qwen3-vl:8b 对**讽刺反话**识别准确（委屈），而 qwen3:4b 错误识别为"开心"——把表面的"你真好"当真了
+2. qwen3-vl:8b 对**暗示想念**识别为"想念"，而 4B 识别为"担心"
+3. qwen3-vl:8b 对**中性文本**更保守（conf=0.30），hybrid fallback 更可靠
+4. `num_predict` 参数会导致 qwen3:4b 返回空内容——Ollama/模型层面的兼容性问题，已移除
+5. qwen3-vl:8b 每次调用约 40-60s，比 4B 的 20-40s 慢约 30%，但语义理解质量显著提升，已设为默认模型
+
+### 模型选择依据
+
+- **默认模型**：`qwen3-vl:8b`（8B 多模态，纯文本语义理解明显优于 4B）
+- **Fallback 模型**：`qwen3:4b`（更快，但讽刺/暗示识别有明显缺陷）
+- **候选升级**：`gpt-oss:20b`（已通过 API 测试可正常工作，延迟更高但能力更强）
+
+### 下一步
+
+设计文档同步（`PROMPT_BUILDER_DESIGN.md`、`HEART_LAKE_DESIGN.md`），然后准备 v2 封板。
+
+---
+
 ## [2026-04-17] 日常模式 v2：真实桌面感知增强与电脑能力补强
 
 **状态**：日常模式 v2 代码完成候选。已按远的要求先暂停 2 小时 Presence Murmur 常驻浸泡和飞书真实触达节奏测试，转为继续补齐代码能力；本轮完成更真实的桌面感知、Browser MCP 轻量 session、文件敏感路径保护、GUI Agent 宏闭环雏形、工具自然闭环、WebUI 可观测性和自主学习候选确认，并通过主回归与真实 LLM 回归。
