@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 from core.cognition.heart_lake.core import HeartLake
 from domains.perception.coordinator import PerceptionEvent, PerceptionSnapshot
@@ -228,7 +228,7 @@ class HeartLakeUpdater:
         self,
         heart_lake: HeartLake,
         custom_rules: Optional[List[AppraisalRule]] = None,
-        emotion_appraiser: Optional[EmotionAppraiser] = None,
+        emotion_appraiser: Optional[Union[EmotionAppraiser, "HybridEmotionAppraiser"]] = None,
     ) -> None:
         self.heart_lake = heart_lake
         self._jealousy_appraisal = _JealousyAppraisal()

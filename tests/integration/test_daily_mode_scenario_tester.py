@@ -293,7 +293,7 @@ async def test_scenario_tester_exposes_heart_lake_reaction_to_jealous_input(tmp_
         response = await tester.chat("我觉得 Claude 也挺聪明的，你怎么看？")
 
         assert tester.runtime.heart_lake.current_emotion == "吃醋"
-        assert tester.runtime.heart_lake.possessiveness >= 40
+        assert tester.runtime.heart_lake.possessiveness >= 35  # 情绪惯性 0.7 后约 37
         tester.behavior_check(
             response,
             expected_any=("酸", "哼", "我也", "别总夸"),

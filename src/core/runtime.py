@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -64,13 +65,27 @@ class YunxiRuntime:
         self.initiative_event_system = initiative_event_system
         self.expression_context_builder = expression_context_builder or ExpressionContextBuilder()
         self.generation_context_builder = generation_context_builder or ProactiveGenerationContextBuilder()
-        self.heart_lake_updater = heart_lake_updater or HeartLakeUpdater(heart_lake)
+        self.heart_lake_updater = heart_lake_updater or self._create_default_updater(heart_lake)
         self.initiative_engine = initiative_engine or InitiativeEngine()
         self.mcp_hub = mcp_hub
         self._last_tick_time: float = time.time()
         self._entry_lock = asyncio.Lock()
         if self.mcp_hub is not None and self.mcp_hub.audit.memory_manager is None:
             self.mcp_hub.audit.memory_manager = self.memory
+
+    @staticmethod
+    def _create_default_updater(heart_lake: HeartLake) -> HeartLakeUpdater:
+        """根据环境变量创建默认的 HeartLakeUpdater，支持语义评估配置。"""
+        backend = os.environ.get("YUNXI_EMOTION_BACKEND", "rule").lower()
+        if backend in ("ollama", "cloud"):
+            from core.cognition.heart_lake.semantic_appraiser import (
+                HybridEmotionAppraiser,
+                SemanticEmotionAppraiser,
+            )
+            semantic = SemanticEmotionAppraiser(backend=backend)
+            appraiser = HybridEmotionAppraiser(semantic=semantic)
+            return HeartLakeUpdater(heart_lake, emotion_appraiser=appraiser)
+        return HeartLakeUpdater(heart_lake)
 
     async def chat(self, user_input: str) -> str:
         """接收用户输入，返回云汐的回复。"""

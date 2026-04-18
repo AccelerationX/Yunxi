@@ -32,6 +32,11 @@ class HeartLake:
         self.last_appraisal_reason: str = ""
         self._last_semantic_appraisal_at: float = 0.0
         self._emotion_cooldowns: Dict[str, float] = {}
+        # 情绪动力学 v2
+        self._last_emotion: str = "平静"
+        self._last_emotion_change_at: float = 0.0
+        self.emotion_inertia: float = 0.7  # delta 应用系数（0.7 = 渐进变化）
+        self.emotion_persistence_seconds: float = 30.0  # 情绪标签持续影响时间
         self._recovery_targets: Dict[str, float] = {
             "valence": 0.0,
             "arousal": 0.0,
@@ -188,13 +193,22 @@ class HeartLake:
         confidence: float = 1.0,
         cooldown_seconds: float = 90.0,
     ) -> None:
-        """Apply semantic emotion-appraisal deltas with bounded dynamics."""
+        """Apply semantic emotion-appraisal deltas with bounded dynamics.
+
+        v2 增强：
+        - 情绪惯性：delta 乘以 inertia 系数（默认 0.7），避免突变
+        - 情绪持续性：旧情绪标签在 persistence 时间内仍保留在 compound_labels
+        - 冷却期：同类型情绪 90 秒内再次触发时 delta 减半
+        """
         now = time.time()
         cooldown_key = primary_label or ",".join(compound_labels or []) or "semantic"
         cooldown_until = self._emotion_cooldowns.get(cooldown_key, 0.0)
         scale = _clamp(float(confidence), 0.25, 1.0)
         if now < cooldown_until:
             scale *= 0.45
+
+        # 情绪惯性：渐进变化
+        scale *= self.emotion_inertia
 
         for key, delta in deltas.items():
             if not hasattr(self, key):
@@ -208,11 +222,29 @@ class HeartLake:
             else:
                 setattr(self, key, _clamp(float(current) + adjusted_delta, 0.0, 100.0))
 
+        # 情绪标签更新：带持续性
+        merged_compound: List[str] = []
+        if compound_labels is not None:
+            merged_compound = [label for label in compound_labels if label]
+
         if primary_label:
+            # 如果情绪标签变化，保留旧标签一段时间
+            if primary_label != self.current_emotion:
+                self._last_emotion = self.current_emotion
+                self._last_emotion_change_at = now
+                # 旧情绪保留在 compound_labels 中
+                if self._last_emotion and self._last_emotion != primary_label:
+                    merged_compound.insert(0, f"刚从{self._last_emotion}转来")
+            else:
+                # 同标签持续，检查是否仍在 persistence 期内
+                if now < self._last_emotion_change_at + self.emotion_persistence_seconds:
+                    if self._last_emotion and self._last_emotion != primary_label:
+                        merged_compound.insert(0, f"还有一点{self._last_emotion}")
+
             self.current_emotion = primary_label
             self._emotion_cooldowns[cooldown_key] = now + cooldown_seconds
-        if compound_labels is not None:
-            self.compound_labels = [label for label in compound_labels if label]
+
+        self.compound_labels = merged_compound
         if reason:
             self.last_appraisal_reason = reason
         self._last_semantic_appraisal_at = now
