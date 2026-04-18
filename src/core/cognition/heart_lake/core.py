@@ -71,35 +71,80 @@ class HeartLake:
         events: List["PerceptionEvent"],
         elapsed_seconds: float = 60.0,
     ) -> None:
-        """根据感知快照和事件更新情感状态。"""
+        """根据感知快照和事件更新情感状态。
+
+        v2 增强：activity_state、fullscreen、input_rate 正式进入情感评估，
+        让云汐不仅能"知道"远在做什么，还能"感受到"他的状态。
+        """
         idle = getattr(snapshot.user_presence, "idle_duration", 0.0)
         app = getattr(snapshot.user_presence, "focused_application", "")
         hour = getattr(snapshot.time_context, "hour", 12)
+        activity_state = getattr(snapshot.user_presence, "activity_state", "")
+        is_fullscreen = getattr(snapshot.user_presence, "is_fullscreen", False)
+        input_rate = getattr(snapshot.user_presence, "input_events_per_minute", 0)
+
         self.apply_natural_recovery(elapsed_seconds)
 
-        # 想念值自然变化
-        if idle >= 300:
+        # === 想念值动态（v2：activity_state  aware）===
+        if activity_state == "away":
+            # 远离开了：想念加速上升
+            self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 30.0)
+        elif activity_state == "idle" and idle >= 300:
+            # 长时间 idle：想念正常上升
             self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 60.0)
+        elif activity_state == "work" and is_fullscreen and input_rate >= 10:
+            # 专注工作：想念几乎不升（知道他忙，默默陪着就好）
+            self.miss_value = max(0.0, self.miss_value - elapsed_seconds / 120.0)
+        elif activity_state == "game":
+            # 打游戏：想念微升（想参与但尊重）
+            self.miss_value = min(100.0, self.miss_value + elapsed_seconds / 90.0)
         elif idle < 60:
+            # 活跃互动中：想念下降
             self.miss_value = max(0.0, self.miss_value - elapsed_seconds / 30.0)
 
-        # 安全感变化
-        if app and "聊天" not in app and "浏览器" not in app and idle < 60:
+        # === 安全感动态（v2：activity_state aware）===
+        if activity_state == "away":
+            # 长时间不在：不确定感上升
+            self.security = max(0.0, self.security - elapsed_seconds / 60.0)
+        elif activity_state == "work" and is_fullscreen:
+            # 专注工作：安全感微升（知道他没乱跑，安心）
+            self.security = min(100.0, self.security + elapsed_seconds / 180.0)
+        elif idle < 60 and (activity_state in ("work", "game", "leisure")):
+            # 活跃但不在和云汐聊天：轻微不安
             self.security = max(0.0, self.security - elapsed_seconds / 120.0)
         elif idle < 60:
+            # 活跃且在和云汐互动：安全感上升
             self.security = min(100.0, self.security + elapsed_seconds / 60.0)
 
-        # 事件驱动的情感切换
+        # === 其他维度动态（v2 新增）===
+        if activity_state == "work" and (hour >= 22 or hour < 6):
+            # 深夜还在工作：心疼感上升
+            self.tenderness = min(100.0, self.tenderness + elapsed_seconds / 120.0)
+        if activity_state == "game" and is_fullscreen:
+            # 沉浸游戏：俏皮感上升（想调皮戳他）
+            self.playfulness = min(100.0, self.playfulness + elapsed_seconds / 120.0)
+        if activity_state == "away" and self.security < 50:
+            # 离开且不安：脆弱感明显上升
+            self.vulnerability = min(100.0, self.vulnerability + elapsed_seconds / 60.0)
+
+        # === 事件驱动的情感切换（v2 增强）===
         event_types = {e.event_type for e in events}
 
         if "user_returned" in event_types:
             self.current_emotion = "开心"
             self.miss_value = max(0.0, self.miss_value - 20.0)
+            self.playfulness = min(100.0, self.playfulness + 5.0)
         elif "long_idle" in event_types:
             self.current_emotion = "想念"
         elif "app_changed" in event_types and self.security < 50:
             self.current_emotion = "委屈"
         elif ("late_night" in event_types) and idle >= 300:
+            self.current_emotion = "担心"
+        elif activity_state == "away" and self.miss_value > 60:
+            # v2：away 状态 + 高想念 → 想念
+            self.current_emotion = "想念"
+        elif activity_state == "work" and (hour >= 22 or hour < 6) and self.miss_value > 50:
+            # v2：深夜工作 + 想念 → 担心（心疼多于想念）
             self.current_emotion = "担心"
         elif self.miss_value > 70:
             self.current_emotion = "想念"
